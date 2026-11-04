@@ -1,4 +1,13 @@
 import os
+import tempfile
 
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
-os.environ["ANTHROPIC_API_KEY"] = ""
+_db = os.path.join(tempfile.mkdtemp(), "test.db")
+_url = os.environ.get("TEST_DATABASE_URL", f"sqlite+aiosqlite:///{_db}")
+os.environ.update(
+    DATABASE_URL=_url,
+    ANTHROPIC_API_KEY="",
+    ADMIN_TOKEN="test-admin",
+    TELEGRAM_WEBHOOK_SECRET="tg-secret",
+    FEISHU_VERIFICATION_TOKEN="fs-token",
+    WECOM_FORWARD_SECRET="wc-secret",
+)

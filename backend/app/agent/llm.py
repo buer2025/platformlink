@@ -1,3 +1,4 @@
+import logging
 import re
 
 import anthropic
@@ -5,6 +6,8 @@ from pydantic import BaseModel, Field
 
 from app.agent.logs import LogRecord
 from app.config import settings
+
+log = logging.getLogger(__name__)
 
 
 class Classification(BaseModel):
@@ -24,24 +27,38 @@ class Finding(BaseModel):
     supplier_note: str = Field(description="若是供应商问题，发给供应商的描述，否则为空")
 
 
+class Rewrite(BaseModel):
+    text: str
+
+
+_clients: dict[str, anthropic.AsyncAnthropic] = {}
+
+
 def _client() -> anthropic.AsyncAnthropic | None:
-    if not settings.anthropic_api_key:
+    key = settings.anthropic_api_key
+    if not key:
         return None
-    return anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    if key not in _clients:
+        _clients[key] = anthropic.AsyncAnthropic(api_key=key)
+    return _clients[key]
 
 
 async def _parse[T: BaseModel](system: str, user: str, schema: type[T], effort: str) -> T | None:
     client = _client()
     if client is None:
         return None
-    resp = await client.messages.parse(
-        model=settings.anthropic_model,
-        max_tokens=4000,
-        system=system,
-        messages=[{"role": "user", "content": user}],
-        output_format=schema,
-        output_config={"effort": effort},
-    )
+    try:
+        resp = await client.messages.parse(
+            model=settings.anthropic_model,
+            max_tokens=4000,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+            output_format=schema,
+            output_config={"effort": effort},
+        )
+    except (anthropic.APIError, ValueError):
+        log.exception("Claude 调用失败，使用规则兜底")
+        return None
     if resp.stop_reason == "refusal":
         return None
     return resp.parsed_output
@@ -110,7 +127,3 @@ async def stylize(text: str, style: dict, purpose: str) -> str:
         effort="low",
     )
     return result.text if result else text
-
-
-class Rewrite(BaseModel):
-    text: str

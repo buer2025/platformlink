@@ -29,6 +29,17 @@ class AutomationMode(enum.StrEnum):
     observe = "observe"  # 只观察不发言
 
 
+class Staff(Base):
+    """我方人员在各平台的账号；他们在群里的发言不会被当成客户问题。"""
+
+    __tablename__ = "staff"
+    __table_args__ = (UniqueConstraint("platform", "account"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    platform: Mapped[Platform] = mapped_column(Enum(Platform))
+    account: Mapped[str] = mapped_column(String(200))
+
+
 class Party(Base):
     """群背后的公司：客户或供应商。"""
 
@@ -69,6 +80,7 @@ class Group(Base):
 
 class Message(Base):
     __tablename__ = "messages"
+    __table_args__ = (UniqueConstraint("group_id", "external_id"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     group_id: Mapped[int] = mapped_column(ForeignKey("groups.id"), index=True)
     external_id: Mapped[str] = mapped_column(String(200), default="")
@@ -76,12 +88,15 @@ class Message(Base):
     text: Mapped[str] = mapped_column(Text)
     reply_to_external_id: Mapped[str] = mapped_column(String(200), default="")
     from_us: Mapped[bool] = mapped_column(default=False)
+    incident_id: Mapped[int | None] = mapped_column(
+        ForeignKey("incidents.id", use_alter=True, name="fk_messages_incident_id"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class IncidentStatus(enum.StrEnum):
     open = "open"
     investigating = "investigating"
+    waiting_supplier = "waiting_supplier"
     resolved = "resolved"
 
 
@@ -100,12 +115,20 @@ class Incident(Base):
     status: Mapped[IncidentStatus] = mapped_column(
         Enum(IncidentStatus), default=IncidentStatus.open
     )
+    # 供应商转交单追踪
+    supplier_group_id: Mapped[int | None] = mapped_column(ForeignKey("groups.id"))
+    ticket_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    supplier_replied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    supplier_last_reply: Mapped[str] = mapped_column(Text, default="")
+    reminders: Mapped[int] = mapped_column(Integer, default=0)
+    related_messages: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class OutboundStatus(enum.StrEnum):
     pending = "pending"  # 预发中，等待倒计时或人工
     needs_approval = "needs_approval"  # 分数太低，必须人工
+    sending = "sending"  # 已被某个发送方认领，防止重复发送
     sent = "sent"
     cancelled = "cancelled"
     failed = "failed"

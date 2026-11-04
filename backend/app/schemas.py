@@ -54,6 +54,7 @@ class MessageOut(BaseModel):
     sender: str
     text: str
     from_us: bool
+    incident_id: int | None
     created_at: datetime
 
 
@@ -69,6 +70,12 @@ class IncidentOut(BaseModel):
     evidence: str
     confidence: int
     status: IncidentStatus
+    supplier_group_id: int | None
+    ticket_sent_at: datetime | None
+    supplier_replied_at: datetime | None
+    supplier_last_reply: str
+    reminders: int
+    related_messages: int
     created_at: datetime
 
 
@@ -101,3 +108,19 @@ class SimulateIn(BaseModel):
     chat_name: str = ""
     sender: str = "tester"
     text: str
+
+
+class StaffIn(BaseModel):
+    name: str
+    platform: Platform
+    account: str
+
+
+class StaffOut(StaffIn):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+
+
+class IncidentUpdate(BaseModel):
+    status: IncidentStatus | None = None
+    responsible: str | None = None

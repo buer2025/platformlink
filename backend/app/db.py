@@ -1,5 +1,7 @@
 from collections.abc import AsyncIterator
+from pathlib import Path
 
+from sqlalchemy import MetaData
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -10,7 +12,12 @@ SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 
 class Base(DeclarativeBase):
-    pass
+    metadata = MetaData(naming_convention={
+        "ix": "ix_%(column_0_label)s",
+        "uq": "uq_%(table_name)s_%(column_0_name)s",
+        "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+        "pk": "pk_%(table_name)s",
+    })
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:
@@ -18,8 +25,12 @@ async def get_session() -> AsyncIterator[AsyncSession]:
         yield session
 
 
-async def init_db() -> None:
-    from app import models  # noqa: F401
+def run_migrations() -> None:
+    """启动时把数据库升级到最新版本（同步函数，需在独立线程中调用）。"""
+    from alembic import command
+    from alembic.config import Config
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    root = Path(__file__).resolve().parent.parent
+    cfg = Config(str(root / "alembic.ini"))
+    cfg.set_main_option("script_location", str(root / "migrations"))
+    command.upgrade(cfg, "head")

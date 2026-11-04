@@ -1,4 +1,5 @@
 import json
+import re
 import time
 
 import httpx
@@ -26,6 +27,7 @@ class FeishuAdapter:
         if msg.get("message_type") != "text":
             return None
         text = json.loads(msg["content"]).get("text", "")
+        text = re.sub(r"@_user_\d+\s*", "", text).strip()
         return InboundMessage(
             platform=self.platform,
             chat_id=msg["chat_id"],
@@ -35,6 +37,7 @@ class FeishuAdapter:
             text=text,
             reply_to_message_id=msg.get("parent_id", ""),
             mentions=[m.get("id", {}).get("open_id", "") for m in msg.get("mentions", [])],
+            is_bot=event.get("sender", {}).get("sender_type") == "app",
         )
 
     async def _tenant_token(self, client: httpx.AsyncClient) -> str:

@@ -26,6 +26,7 @@ class TelegramAdapter:
             sender=sender.get("username") or sender.get("first_name", ""),
             text=msg["text"],
             reply_to_message_id=str(msg.get("reply_to_message", {}).get("message_id", "")),
+            is_bot=bool(sender.get("is_bot")),
         )
 
     async def send(

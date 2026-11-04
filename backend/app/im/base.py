@@ -12,6 +12,7 @@ class InboundMessage:
     text: str
     reply_to_message_id: str = ""
     mentions: list[str] = field(default_factory=list)
+    is_bot: bool = False
 
 
 class IMAdapter(Protocol):

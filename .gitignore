@@ -4,3 +4,4 @@ dist/
 __pycache__/
 *.db
 .env
+backend/static/
