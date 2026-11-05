@@ -99,7 +99,7 @@ cd backend && uv run python -m evals.run
 ```
 backend/app/
   im/          IM 适配层（telegram / feishu / wecom）
-  agent/       分类、排查、风格改写（Claude）；logs.py 日志库查询占位
+  agent/       分诊、排查循环、证据清单、风格改写（Claude + Jev）；logs.py 查询 new-api 日志库
   services/    pipeline 入站处理；presend 预发队列与调度
   api/         REST 接口
 frontend/src/pages/  预发队列、事件中心、群与标记

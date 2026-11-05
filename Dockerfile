@@ -20,5 +20,5 @@ RUN useradd -r app && chown -R app /app
 USER app
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s CMD python -c "import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')"
-# 单进程：预发调度器在进程内运行，不要开多 worker
+# 默认单进程；可加 --workers N 或多副本（调度器、轮询通过数据库租约协调，需 PostgreSQL）
 CMD ["/app/.venv/bin/uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
