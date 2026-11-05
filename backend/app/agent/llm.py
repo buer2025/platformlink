@@ -101,7 +101,8 @@ async def investigate(c: Classification, log: LogRecord | None) -> Finding:
         "你是模型 API 聚合平台的排查 Agent。根据客户反馈和调用日志判断责任方："
         "customer（参数错误、余额不足、key 失效等）、us（我方网关问题）、supplier（上游供应商报错/限流）。"
         "证据不足时 responsible=unknown，并在给客户的回复里礼貌索要 request_id。",
-        f"客户反馈: {c.summary}\n类别: {c.category}\n模型: {c.model}\n{log_text}",
+        f"客户反馈: {c.summary}\n类别: {c.category}\n模型: {c.model}\n"
+        f"request_id: {c.request_id or '客户未提供'}\n{log_text}",
         Finding,
         effort="medium",
     )
