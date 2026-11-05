@@ -38,6 +38,7 @@ const eventMeta: Record<string, [string, LucideIcon, Tone]> = {
   supplier_reply: ['供应商回复', MessageCircle, 'warn'],
   no_supplier: ['需人工转交', CircleAlert, 'bad'],
   manual: ['人工操作', Pencil, 'slate'],
+  reinvestigate: ['重新排查', RotateCcw, 'violet'],
   note: ['备注', NotebookPen, 'slate'],
   knowledge_saved: ['沉淀知识', BookPlus, 'ok'],
 }
@@ -86,6 +87,11 @@ function TimelineItem({ e, last }: { e: IncidentEvent; last: boolean }) {
 const verdict = (i: Incident) => ({
   customer: '客户侧问题', us: '我方问题', supplier: '供应商问题', unknown: '证据不足，待确认',
 } as Record<string, string>)[i.responsible] ?? '排查中…'
+
+const scoreRule = (n: number) => n >= 90
+  ? '准确率 ≥ 90：回复倒计时 2 分钟后自动发出'
+  : n >= 70 ? '准确率 70–89：回复倒计时 10 分钟后自动发出，期间可改可撤'
+    : '准确率 < 70：证据不足，回复必须人工确认'
 
 function Evidence({ text }: { text: string }) {
   const [open, setOpen] = useState(false)
@@ -159,6 +165,7 @@ function IncidentDrawer({ i, groups, workflows, onClose }: {
             <div className="min-w-0">
               <div className="text-[11px] tracking-wide text-fg-3">AGENT 判断</div>
               <div className="mt-0.5 text-[17px] font-semibold tracking-tight">{verdict(i)}</div>
+              <div className="mt-0.5 text-xs text-fg-3">{scoreRule(i.confidence)}</div>
             </div>
           </div>
           {/* 第二层：依据（默认折叠到 4 行） */}

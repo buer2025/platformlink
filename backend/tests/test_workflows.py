@@ -229,3 +229,23 @@ async def test_knowledge_substring_search(client):  # noqa: F811
     await client.post("/api/knowledge", json={"title": "客户反馈 seedance 一直 429", "symptoms": ""})
     assert len((await client.get("/api/knowledge", params={"q": "429"})).json()) == 1
     assert (await client.get("/api/knowledge", params={"q": "超时"})).json() == []
+
+
+async def test_corrected_request_id_reinvestigates(client, fake):  # noqa: F811
+    await setup_groups(client)
+    await client.post("/api/webhooks/telegram", headers=TG,
+                      json=tg(100, 21, "seedance 又 429 了 request_id: req-test-00"))
+    await client.post("/api/webhooks/telegram", headers=TG,
+                      json=tg(100, 22, "seedance 又 429 了 request_id: req-test-003"))
+    incs = (await client.get("/api/incidents")).json()
+    assert len(incs) == 1 and incs[0]["request_id"] == "req-test-003"
+    replies = [o for o in await outbound(client) if o["purpose"] == "customer_reply"]
+    assert sorted(o["status"] for o in replies) == ["cancelled", "needs_approval"]
+    acks = [o for o in await outbound(client) if o["purpose"] == "ack"]
+    assert len(acks) == 1  # 不重复安抚
+    ev = (await client.get(f"/api/incidents/{incs[0]['id']}/events")).json()
+    assert any(e["kind"] == "reinvestigate" and "req-test-00 → req-test-003" in e["text"] for e in ev)
+    # 同一个 request_id 再发一次：只合并，不重复排查
+    await client.post("/api/webhooks/telegram", headers=TG,
+                      json=tg(100, 23, "还是 429 request_id: req-test-003"))
+    assert len([o for o in await outbound(client) if o["purpose"] == "customer_reply"]) == 2

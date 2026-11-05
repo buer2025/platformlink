@@ -17,6 +17,8 @@ from app.models import (
     Incident,
     IncidentStatus,
     Message,
+    Outbound,
+    OutboundStatus,
     Platform,
     Staff,
     Workflow,
@@ -124,6 +126,78 @@ async def _mergeable(session: AsyncSession, group: Group, category: str) -> Inci
     return next((i for i in rows if presend.aware(i.created_at) >= since), None)
 
 
+async def _investigate(session: AsyncSession, group: Group, incident: Incident,
+                       c: llm.Classification, text: str, reply_to: str,
+                       wf: Workflow | None) -> None:
+    """查数据 → Agent 排查 → 客户回复 / 供应商转交进入预发队列。"""
+    force_confirm = bool(wf and wf.automation == "confirm")
+    steps = wf.lookups if wf else DEFAULT_LOOKUPS
+    ev = await logs.lookup(steps, c.request_id, group.api_users or [], c.model)
+    incident.lookup_result = ev.text
+    record(session, incident.id, "lookup", ev.text)
+
+    kb = await knowledge.search(session, f"{text}\n{ev.text}", c.model)
+    if kb:
+        for k in kb:
+            k.hits += 1
+        record(session, incident.id, "knowledge",
+               "参考知识：" + "；".join(f"#{k.id} {k.title}" for k in kb))
+    instructions = wf.instructions if wf else ""
+    preloaded = ev.text + (f"\n\n## 知识库命中\n{knowledge.as_prompt(kb)}" if kb else "")
+    ctx = harness.Ctx(session=session, group=group, incident=incident, c=c, text=text,
+                      found=ev.found,
+                      channel_ids=list(ev.channel_ids), knowledge_ids=[k.id for k in kb])
+    f = await harness.run(ctx, instructions, preloaded)
+    if f is None:  # 无 Key / 调用失败：单次判断或规则兜底
+        f = await llm.investigate(c, ev.text, instructions, ev.found, knowledge.as_prompt(kb))
+    incident.knowledge_ids = ctx.knowledge_ids
+    ev.channel_ids = ctx.channel_ids
+    incident.responsible, incident.evidence, incident.confidence = (
+        f.responsible, f.evidence, f.confidence)
+    record(session, incident.id, "finding",
+           f"责任方 {f.responsible}，准确率 {f.confidence}：{f.evidence}"
+           + (f"\n自检：{f.self_check}" if f.self_check else ""))
+
+    reply = await llm.stylize(f.customer_reply, group.style, "customer_reply")
+    await presend.enqueue(session, group, reply, f.confidence, "customer_reply", incident.id,
+                          reply_to=reply_to, force_confirm=force_confirm)
+
+    route = wf.route_supplier if wf else True
+    # 已经转交过供应商的不再重复转交
+    if f.responsible == "supplier" and f.supplier_note and route and not incident.ticket_sent_at:
+        supplier = await find_supplier_group(session, c.model, ev.channel_ids)
+        if supplier:
+            incident.supplier_group_id = supplier.id
+            incident.status = IncidentStatus.waiting_supplier
+            note = await llm.stylize(f.supplier_note, supplier.style, "supplier_ticket")
+            await presend.enqueue(session, supplier, note, f.confidence, "supplier_ticket",
+                                  incident.id, mentions=supplier.contacts,
+                                  force_confirm=force_confirm)
+        else:
+            incident.evidence += "\n（未找到对应的供应商群，需人工转交）"
+            record(session, incident.id, "no_supplier", "未找到对应的供应商群，需人工转交")
+
+
+
+async def _reinvestigate(session: AsyncSession, group: Group, incident: Incident,
+                         c: llm.Classification, m: InboundMessage) -> None:
+    """客户补充或更正了 request_id：撤回还没发出的回复，按新信息重新排查。"""
+    old = incident.request_id
+    incident.request_id = c.request_id
+    if not incident.model and c.model:
+        incident.model = c.model
+    pending = (await session.scalars(select(Outbound).where(
+        Outbound.incident_id == incident.id, Outbound.status.in_(presend.OPEN),
+        Outbound.purpose.in_(["customer_reply", "supplier_ticket"])))).all()
+    for o in pending:
+        o.status = OutboundStatus.cancelled
+    record(session, incident.id, "reinvestigate",
+           f"客户{'更正' if old else '补充'}了 request_id：{old or '无'} → {c.request_id}"
+           + (f"，撤回 {len(pending)} 条未发送的消息" if pending else "") + "，重新排查")
+    wf = await session.get(Workflow, incident.workflow_id) if incident.workflow_id else None
+    await _investigate(session, group, incident, c, m.text, m.message_id, wf)
+
+
 async def handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident | None:
     group = await upsert_group(session, m)
     if m.message_id and await session.scalar(select(Message.id).where(
@@ -156,8 +230,8 @@ async def handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident |
         existing.related_messages += 1
         msg.incident_id = existing.id
         record(session, existing.id, "merged", f"{m.sender}：{m.text}", actor=m.sender)
-        if c.request_id and not existing.request_id:
-            existing.request_id = c.request_id
+        if c.request_id and c.request_id != existing.request_id:
+            await _reinvestigate(session, group, existing, c, m)
         await session.commit()
         return existing
 
@@ -173,55 +247,10 @@ async def handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident |
     record(session, incident.id, "classified",
            f"类别 {c.category}，模型 {c.model or '未知'}，request_id {c.request_id or '无'}；"
            f"链路：{wf.name if wf else '默认'}")
-    force_confirm = bool(wf and wf.automation == "confirm")
 
     ack = await llm.stylize("收到，正在排查，稍等～", group.style, "ack")
     await presend.enqueue(session, group, ack, 100, "ack", incident.id, reply_to=m.message_id)
 
-    steps = wf.lookups if wf else DEFAULT_LOOKUPS
-    ev = await logs.lookup(steps, c.request_id, group.api_users or [], c.model)
-    incident.lookup_result = ev.text
-    record(session, incident.id, "lookup", ev.text)
-
-    kb = await knowledge.search(session, f"{m.text}\n{ev.text}", c.model)
-    if kb:
-        for k in kb:
-            k.hits += 1
-        record(session, incident.id, "knowledge",
-               "参考知识：" + "；".join(f"#{k.id} {k.title}" for k in kb))
-    instructions = wf.instructions if wf else ""
-    preloaded = ev.text + (f"\n\n## 知识库命中\n{knowledge.as_prompt(kb)}" if kb else "")
-    ctx = harness.Ctx(session=session, group=group, incident=incident, c=c, text=m.text,
-                      found=ev.found,
-                      channel_ids=list(ev.channel_ids), knowledge_ids=[k.id for k in kb])
-    f = await harness.run(ctx, instructions, preloaded)
-    if f is None:  # 无 Key / 调用失败：单次判断或规则兜底
-        f = await llm.investigate(c, ev.text, instructions, ev.found, knowledge.as_prompt(kb))
-    incident.knowledge_ids = ctx.knowledge_ids
-    ev.channel_ids = ctx.channel_ids
-    incident.responsible, incident.evidence, incident.confidence = (
-        f.responsible, f.evidence, f.confidence)
-    record(session, incident.id, "finding",
-           f"责任方 {f.responsible}，准确率 {f.confidence}：{f.evidence}"
-           + (f"\n自检：{f.self_check}" if f.self_check else ""))
-
-    reply = await llm.stylize(f.customer_reply, group.style, "customer_reply")
-    await presend.enqueue(session, group, reply, f.confidence, "customer_reply", incident.id,
-                          reply_to=m.message_id, force_confirm=force_confirm)
-
-    route = wf.route_supplier if wf else True
-    if f.responsible == "supplier" and f.supplier_note and route:
-        supplier = await find_supplier_group(session, c.model, ev.channel_ids)
-        if supplier:
-            incident.supplier_group_id = supplier.id
-            incident.status = IncidentStatus.waiting_supplier
-            note = await llm.stylize(f.supplier_note, supplier.style, "supplier_ticket")
-            await presend.enqueue(session, supplier, note, f.confidence, "supplier_ticket",
-                                  incident.id, mentions=supplier.contacts,
-                                  force_confirm=force_confirm)
-        else:
-            incident.evidence += "\n（未找到对应的供应商群，需人工转交）"
-            record(session, incident.id, "no_supplier", "未找到对应的供应商群，需人工转交")
-
+    await _investigate(session, group, incident, c, m.text, m.message_id, wf)
     await session.commit()
     return incident

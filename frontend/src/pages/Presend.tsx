@@ -1,13 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { AtSign, Check, ChevronRight, CircleAlert, Inbox, Pencil, RotateCw, Send, Timer, X } from 'lucide-react'
+import { Check, CornerDownRight, ChevronRight, CircleAlert, Inbox, Pencil, RotateCw, Send, Timer, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
-import { ago, api, categoryLabel, post, type Incident, type Outbound } from '../api'
+import { ago, api, categoryLabel, post, type Group, type Incident, type Outbound } from '../api'
 import { useHotkeys, useListNav, useNow } from '../hooks'
-import { Badge, Button, Card, Empty, Kbd, listItem, PageHeader, ScoreRing, Segmented, Skeleton, Textarea, type Tone } from '../ui'
+import { Avatar, Badge, Button, Card, Empty, Kbd, listItem, PageHeader, ScoreRing, scoreTone, Segmented, Skeleton, Stat, Textarea, type Tone } from '../ui'
 
 export const purposeLabel: Record<string, string> = {
   ack: '安抚回复', customer_reply: '客户回复', supplier_ticket: '供应商转交',
@@ -49,19 +49,26 @@ function useActions() {
   })
 }
 
-function Countdown({ o, now }: { o: Outbound; now: number }) {
+function TimerPill({ o, now }: { o: Outbound; now: number }) {
   if (o.status !== 'pending' || !o.send_at) return null
   const total = Math.max(1, Date.parse(o.send_at) - Date.parse(o.created_at))
   const left = Math.max(0, Date.parse(o.send_at) - now)
+  const r = 6, c = 2 * Math.PI * r
   return (
-    <div className="absolute inset-x-2 bottom-0 h-[2px] overflow-hidden rounded-full bg-line/50">
-      <motion.div className="h-full bg-info" animate={{ width: `${(left / total) * 100}%` }} transition={{ duration: 1, ease: 'linear' }} />
-    </div>
+    <span className="tnum inline-flex h-6 items-center gap-1.5 rounded-full bg-info-soft pr-2.5 pl-1.5 text-[11.5px] font-medium text-info"
+      title="倒计时结束后自动发送，期间可修改或取消">
+      <svg width={16} height={16} className="-rotate-90">
+        <circle cx={8} cy={8} r={r} fill="none" stroke="currentColor" strokeOpacity={0.2} strokeWidth={2} />
+        <circle cx={8} cy={8} r={r} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"
+          strokeDasharray={c} strokeDashoffset={c * (1 - left / total)} style={{ transition: 'stroke-dashoffset 1s linear' }} />
+      </svg>
+      {left > 0 ? `${fmtLeft(Math.round(left / 1000))} 后发送` : '发送中'}
+    </span>
   )
 }
 
-function Row({ o, now, selected, editing, setEditing, onSelect }: {
-  o: Outbound; now: number; selected: boolean; editing: boolean
+function Row({ o, now, selected, editing, setEditing, onSelect, toCustomer }: {
+  o: Outbound; now: number; selected: boolean; editing: boolean; toCustomer: boolean
   setEditing: (v: boolean) => void; onSelect: () => void
 }) {
   const act = useActions()
@@ -72,29 +79,32 @@ function Row({ o, now, selected, editing, setEditing, onSelect }: {
   if (editing !== wasEditing) { setWasEditing(editing); if (editing) setText(o.text) }
   useEffect(() => { if (editing) requestAnimationFrame(() => ta.current?.focus()) }, [editing])
   const [label, tone] = statusInfo[o.status]
-  const left = o.send_at ? Math.max(0, Math.round((Date.parse(o.send_at) - now) / 1000)) : null
-  const long = o.text.length > 120
+  const long = o.text.length > 150
   const saveEdit = () => text.trim() && act.mutate({ o, action: 'edit', body: { text } }, { onSuccess: () => setEditing(false) })
 
   return (
     <motion.div layout {...listItem} data-row={o.id} data-testid="outbound" onClick={onSelect}
-      className={clsx('group/row relative -mx-2 rounded-xl px-2 py-3 transition-colors duration-150',
-        selected ? 'bg-accent-soft/50' : 'hover:bg-panel-2/70')}>
+      className={clsx('group/row relative -mx-3 rounded-2xl px-3 py-4 transition-colors duration-200',
+        selected ? 'bg-accent-soft/45' : 'hover:bg-panel-2/60')}>
       <div className="flex gap-3">
-        <ScoreRing score={o.score} size={30} />
+        {toCustomer
+          ? <span className="grid size-7 shrink-0 place-items-center rounded-full bg-panel-2 text-fg-3 ring-1 ring-line ring-inset"><CornerDownRight size={13} /></span>
+          : <Avatar name={o.group_name} size={28} />}
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 text-xs text-fg-3">
-            <span className="font-medium text-fg-2">{purposeLabel[o.purpose] ?? o.purpose}</span>
-            <span>→ {o.group_name}</span>
-            {o.mentions.length > 0 && <span className="flex items-center gap-0.5"><AtSign size={11} />{o.mentions.map((m) => `@${m}`).join(' ')}</span>}
-            <span className="ml-auto flex items-center gap-1.5 tabular-nums">
-              {o.status === 'pending' && left !== null
-                ? <span className="flex items-center gap-1 font-medium text-info"><Timer size={12} />{left > 0 ? `${fmtLeft(left)} 后自动发送` : '即将发送'}</span>
-                : <Badge tone={tone} dot>{label}</Badge>}
+          <div className="flex min-h-7 flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px]">
+            {toCustomer
+              ? <span className="font-medium text-fg-2">{o.purpose === 'ack' ? '先安抚客户' : '回复客户'}</span>
+              : <><span className="text-fg-3">转交给</span><span className="font-medium text-fg">{o.group_name}</span></>}
+            {o.purpose === 'ack' && !editing && <span className="truncate text-fg">「{o.text}」</span>}
+            {o.mentions.length > 0 && <span className="text-fg-3">{o.mentions.map((m) => `@${m}`).join(' ')}</span>}
+            <span className="ml-auto flex items-center gap-2">
+              <span className={clsx('tnum text-[11.5px] font-medium', { ok: 'text-ok', warn: 'text-warn', bad: 'text-bad' }[scoreTone(o.score) as 'ok'])}
+                title="Agent 对这条消息的准确率评分">准确率 {o.score}</span>
+              {o.status === 'pending' ? <TimerPill o={o} now={now} /> : <Badge tone={tone} dot>{label}</Badge>}
             </span>
           </div>
           <AnimatePresence mode="wait" initial={false}>
-            {editing ? (
+            {o.purpose === 'ack' && !editing ? null : editing ? (
               <motion.div key="edit" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="mt-2">
                 <Textarea ref={ta} rows={4} value={text} onChange={(e) => setText(e.target.value)}
                   onKeyDown={(e) => {
@@ -107,10 +117,13 @@ function Row({ o, now, selected, editing, setEditing, onSelect }: {
                 </div>
               </motion.div>
             ) : (
-              <motion.div key="text" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-1.5">
-                <p className={clsx('text-[14px] leading-7 whitespace-pre-wrap text-fg', long && !expanded && 'line-clamp-3')}>{o.text}</p>
+              <motion.div key="text" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-2 max-w-[44rem]">
+                <div className={clsx('rounded-2xl rounded-tl-md px-4 py-3 ring-1 ring-line ring-inset',
+                  o.purpose.startsWith('supplier') ? 'bg-warn-soft/45' : 'bg-panel-2')}>
+                  <p className={clsx('text-[14px] leading-[1.75] whitespace-pre-wrap text-fg', long && !expanded && 'line-clamp-3')}>{o.text}</p>
+                </div>
                 {long && (
-                  <button className="mt-0.5 text-xs text-fg-3 hover:text-accent" onClick={(e) => { e.stopPropagation(); setExpanded(!expanded) }}>
+                  <button className="mt-1.5 ml-1 text-xs text-fg-3 hover:text-accent" onClick={(e) => { e.stopPropagation(); setExpanded(!expanded) }}>
                     {expanded ? '收起' : '展开全文'}
                   </button>
                 )}
@@ -119,8 +132,8 @@ function Row({ o, now, selected, editing, setEditing, onSelect }: {
           </AnimatePresence>
           {o.error && <p className="mt-1.5 flex items-center gap-1 text-xs text-bad"><CircleAlert size={13} />{o.error}</p>}
           {actionable(o) && !editing && (
-            <div className={clsx('mt-2.5 flex flex-wrap gap-1.5 transition-opacity duration-150',
-              selected || o.status === 'needs_approval' || o.status === 'failed' ? 'opacity-100' : 'md:opacity-0 md:group-hover/row:opacity-100 md:focus-within:opacity-100')}>
+            <div className={clsx('mt-3 flex flex-wrap gap-1.5 transition-opacity duration-200',
+              selected || o.status === 'failed' ? 'opacity-100' : 'md:opacity-0 md:group-hover/row:opacity-100 md:focus-within:opacity-100')}>
               <Button variant="primary" size="sm" disabled={act.isPending} icon={o.status === 'failed' ? <RotateCw size={13} /> : <Send size={13} />}
                 onClick={(e) => { e.stopPropagation(); act.mutate({ o, action: 'send' }) }} kbd={selected ? '⌘↵' : undefined}>
                 {o.status === 'failed' ? '重新发送' : '立即发送'}
@@ -132,37 +145,47 @@ function Row({ o, now, selected, editing, setEditing, onSelect }: {
           )}
         </div>
       </div>
-      <Countdown o={o} now={now} />
     </motion.div>
   )
 }
 
-/** 一个事件下的所有待发消息放在一张卡片里：先看是什么事，再看要发什么。 */
-function Thread({ incident, items, children }: { incident?: Incident; items: Outbound[]; children: React.ReactNode }) {
+const verdictText: Record<string, [string, Tone]> = {
+  customer: ['客户侧问题', 'info'], us: ['我方问题', 'violet'], supplier: ['供应商问题', 'warn'], unknown: ['待确认', 'slate'],
+}
+
+/** 一个事件下的所有待发消息放在一张卡片里：先看是什么事、Agent 怎么判断，再看要发什么。 */
+function Thread({ incident, items, groupName, children }: { incident?: Incident; items: Outbound[]; groupName: string; children: React.ReactNode }) {
   const first = items[0]
+  const [vt, vtone] = incident ? verdictText[incident.responsible] ?? ['排查中', 'slate' as Tone] : ['', 'slate' as Tone]
   return (
     <motion.section layout {...listItem}>
-      <Card className="px-5 pt-4 pb-2">
-        <header className="mb-1 flex items-start gap-3">
+      <Card className="overflow-hidden">
+        <header className="flex items-start gap-3.5 border-b border-line px-6 pt-5 pb-4">
+          <Avatar name={groupName} size={40} square />
           <div className="min-w-0 flex-1">
-            <h3 className="truncate text-[15px] font-semibold tracking-tight">
-              {incident?.summary || first.group_name}
+            <h3 className="line-clamp-2 text-[15.5px] leading-snug font-semibold tracking-tight text-fg">
+              {incident?.summary || '主动消息'}
             </h3>
-            <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-fg-3">
-              {incident && <span>{first.group_name}</span>}
-              {incident && <span>·</span>}
-              {incident && <span>{categoryLabel[incident.category] ?? incident.category}</span>}
-              {incident?.model && <><span>·</span><span>{incident.model}</span></>}
-              <span>·</span><span>{ago(first.created_at)}</span>
+            <p className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[12.5px] text-fg-3">
+              <span className="text-fg-2">{groupName}</span>
+              {incident && <><span className="opacity-50">/</span><span>{categoryLabel[incident.category] ?? incident.category}</span></>}
+              {incident?.model && <><span className="opacity-50">/</span><span>{incident.model}</span></>}
+              <span className="opacity-50">/</span><span>{ago(first.created_at)}</span>
             </p>
           </div>
           {incident && (
-            <Link to={`/incidents?open=${incident.id}`} className="flex shrink-0 items-center gap-0.5 text-xs text-fg-3 transition-colors hover:text-accent">
-              事件 #{incident.id}<ChevronRight size={13} />
+            <Link to={`/incidents?open=${incident.id}`} title="查看排查过程"
+              className="flex shrink-0 items-center gap-2 rounded-xl py-1 pr-1.5 pl-2.5 transition-colors hover:bg-panel-2">
+              <span className="text-right">
+                <span className="block text-[10.5px] tracking-wider text-fg-3">AGENT 判断</span>
+                <Badge tone={vtone} className="mt-0.5">{vt}</Badge>
+              </span>
+              <ScoreRing score={incident.confidence} size={32} />
+              <ChevronRight size={14} className="text-fg-3" />
             </Link>
           )}
         </header>
-        <div className="divide-y divide-line/70">{children}</div>
+        <div className="divide-y divide-line px-6 py-1">{children}</div>
       </Card>
     </motion.section>
   )
@@ -180,6 +203,8 @@ export default function Presend() {
   const done = data.filter((o) => !OPEN.includes(o.status))
   const { data: incidentList = [] } = useQuery({ queryKey: ['incidents'], queryFn: () => api<Incident[]>('/incidents') })
   const incidents = new Map(incidentList.map((i) => [i.id, i]))
+  const { data: groupList = [] } = useQuery({ queryKey: ['groups'], queryFn: () => api<Group[]>('/groups') })
+  const groupNames = new Map(groupList.map((g) => [g.id, g.name]))
   const threads = groupBy(tab === 'open' ? open : done)
   const rows = threads.flatMap(([, items]) => items)  // 键盘导航按显示顺序
   const { sel, setSel, current, move } = useListNav(rows)
@@ -193,29 +218,36 @@ export default function Presend() {
     '1': () => setTab('open'), '2': () => setTab('done'),
   }, editing === null)
 
-  const approval = open.filter((o) => o.status === 'needs_approval').length
+  const approval = open.filter((o) => o.status === 'needs_approval' || o.status === 'failed').length
+  const counting = open.filter((o) => o.status === 'pending').length
+  const today = new Date(now).toDateString()
+  const sentToday = done.filter((o) => o.status === 'sent' && new Date(o.created_at).toDateString() === today).length
   return (
     <div>
-      <PageHeader title="预发队列"
-        desc={open.length ? `${open.length} 条待处理${approval ? `，其中 ${approval} 条需要你确认` : ''}。不操作的消息会在倒计时结束后自动发出。` : 'Agent 起草的消息都会先进入这里。'}>
+      <PageHeader title="预发队列" desc="Agent 起草的每条消息都先到这里。你可以修改、立即发送或取消；不操作的会在倒计时结束后自动发出。">
         <Segmented value={tab} onChange={(v) => { setTab(v); setSel(null) }} options={[
           { value: 'open', label: <>待处理 <span className="tabular-nums text-fg-3">{open.length}</span></> },
           { value: 'done', label: '历史' },
         ]} />
       </PageHeader>
+      <div className="mb-8 grid grid-cols-3 gap-3">
+        <Stat label="需要你确认" value={approval} tone="warn" icon={<CircleAlert size={13} />} hint="评分不足或链路要求人工" onClick={() => setTab('open')} />
+        <Stat label="倒计时中" value={counting} tone="info" icon={<Timer size={13} />} hint="到点自动发送" onClick={() => setTab('open')} />
+        <Stat label="今日已发送" value={sentToday} tone="ok" icon={<Check size={13} />} hint="含自动与手动" onClick={() => setTab('done')} />
+      </div>
       <h2 className="sr-only">{tab === 'open' ? `待处理（${open.length}）` : '历史'}</h2>
       {isLoading ? <Skeleton /> : rows.length === 0 ? (
         tab === 'open'
           ? <Empty icon={<Check size={18} />} title="全部处理完了">新消息进来时会出现在这里，按 <Kbd>J</Kbd><Kbd>K</Kbd> 上下切换，<Kbd>⌘</Kbd><Kbd>↵</Kbd> 发送。</Empty>
           : <Empty icon={<Inbox size={18} />} title="还没有历史消息" />
       ) : (
-        <div className={clsx('space-y-4', tab === 'done' && 'opacity-80')}>
+        <div className={clsx('space-y-5', tab === 'done' && 'opacity-85')}>
           <AnimatePresence initial={false} mode="popLayout">
             {threads.map(([key, items]) => (
-              <Thread key={key} items={items} incident={items[0].incident_id ? incidents.get(items[0].incident_id) : undefined}>
+              <Thread key={key} items={items} groupName={threadGroup(items, incidents, groupNames)} incident={items[0].incident_id ? incidents.get(items[0].incident_id) : undefined}>
                 <AnimatePresence initial={false} mode="popLayout">
                   {items.map((o) => (
-                    <Row key={o.id} o={o} now={now} selected={sel === o.id} editing={editing === o.id}
+                    <Row key={o.id} toCustomer={o.group_name === threadGroup(items, incidents, groupNames)} o={o} now={now} selected={sel === o.id} editing={editing === o.id}
                       setEditing={(v) => setEditing(v ? o.id : null)} onSelect={() => setSel(o.id)} />
                   ))}
                 </AnimatePresence>
@@ -237,4 +269,10 @@ function groupBy(list: Outbound[]): [string, Outbound[]][] {
     m.set(k, [...(m.get(k) ?? []), o])
   }
   return [...m.entries()]
+}
+
+/** 卡片标题用客户群的名字（转交单发往供应商群，但事件属于客户）。 */
+function threadGroup(items: Outbound[], incidents: Map<number, Incident>, names: Map<number, string>) {
+  const inc = items[0].incident_id ? incidents.get(items[0].incident_id) : undefined
+  return (inc && names.get(inc.group_id)) || items[0].group_name
 }

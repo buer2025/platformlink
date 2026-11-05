@@ -49,19 +49,19 @@ async function api(path, body, method) {
   await cards.first().waitFor()
   const n = await cards.count()
   check(n >= 3, `预发队列显示 ${n} 条（安抚/客户回复/供应商转交）`)
-  check(await page.getByText('供应商转交').first().isVisible(), '供应商转交单进入队列')
+  check(await page.getByText('转交给').first().isVisible(), '供应商转交单进入队列')
   check(await page.getByText('@yy').first().isVisible(), '转交单 @ 供应商对接人')
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/presend.png` })
 
   // 修改一条
-  const reply = cards.filter({ hasText: '客户回复' }).first()
+  const reply = cards.filter({ hasText: '回复客户' }).first()
   await reply.getByRole('button', { name: '修改' }).click()
   await reply.locator('textarea').fill('人工修改后的回复')
   await reply.getByRole('button', { name: /保存/ }).click()
   await page.getByText('人工修改后的回复').waitFor()
   check(true, '修改消息后保存')
   // 取消一条
-  const ticket = cards.filter({ hasText: '供应商转交' }).first()
+  const ticket = cards.filter({ hasText: '转交给' }).first()
   await ticket.getByRole('button', { name: '取消' }).click()
   await page.getByText('已取消').first().waitFor()
   await page.getByRole('button', { name: '历史' }).click()

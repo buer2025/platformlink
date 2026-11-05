@@ -13,7 +13,7 @@ export const spring = { type: 'spring', stiffness: 520, damping: 38, mass: 0.8 }
 
 type Variant = 'primary' | 'plain' | 'ghost' | 'danger'
 const variants: Record<Variant, string> = {
-  primary: 'bg-accent text-accent-fg hover:brightness-110 shadow-[inset_0_1px_0_rgb(255_255_255/0.15)]',
+  primary: 'bg-accent text-accent-fg hover:brightness-110 shadow-[0_1px_2px_rgb(0_0_0/0.15),inset_0_1px_0_rgb(255_255_255/0.18)]',
   plain: 'bg-panel text-fg border border-line hover:bg-panel-2 hover:border-line-strong',
   ghost: 'text-fg-2 hover:bg-panel-2 hover:text-fg',
   danger: 'bg-panel text-bad border border-line hover:bg-bad-soft hover:border-bad/30',
@@ -169,7 +169,7 @@ export function ScoreRing({ score, size = 34 }: { score: number; size?: number }
 }
 
 export function Card({ children, className, ...p }: { children: ReactNode; className?: string } & React.HTMLAttributes<HTMLDivElement>) {
-  return <div {...p} className={clsx('rounded-xl border border-line bg-panel shadow-card', className)}>{children}</div>
+  return <div {...p} className={clsx('surface rounded-2xl', className)}>{children}</div>
 }
 
 export function Empty({ icon, title, children }: { icon?: ReactNode; title: string; children?: ReactNode }) {
@@ -275,4 +275,40 @@ export const listItem = {
   animate: { opacity: 1, y: 0 },
   exit: { opacity: 0, x: -24, transition: { duration: 0.18 } },
   transition: spring,
+}
+
+/** 由名字生成的头像：同一个群永远是同一种颜色。 */
+const AVATAR = ['#3d4fd6', '#1f7a4d', '#a8570c', '#6b4fc8', '#2b6cb0', '#b4446c', '#4d7c0f', '#0e7490']
+export function Avatar({ name, size = 36, square }: { name: string; size?: number; square?: boolean }) {
+  let h = 0
+  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0
+  const c = AVATAR[h % AVATAR.length]
+  return (
+    <span className={clsx('grid shrink-0 place-items-center font-semibold text-white select-none', square ? 'rounded-xl' : 'rounded-full')}
+      style={{
+        width: size, height: size, fontSize: size * 0.4,
+        background: `linear-gradient(145deg, color-mix(in oklab, ${c} 82%, white), ${c})`,
+        boxShadow: 'inset 0 1px 0 rgb(255 255 255 / 0.25), 0 1px 2px rgb(0 0 0 / 0.12)',
+      }}>
+      {name.replace(/[·\s]/g, '').slice(0, 1)}
+    </span>
+  )
+}
+
+/** 统计卡：大数字 + 一句话。 */
+export function Stat({ label, value, hint, tone = 'slate', icon, active, onClick }: {
+  label: string; value: number; hint?: string; tone?: Tone; icon?: ReactNode; active?: boolean; onClick?: () => void
+}) {
+  const color: Record<Tone, string> = {
+    slate: 'text-fg-3', accent: 'text-accent', ok: 'text-ok', warn: 'text-warn', bad: 'text-bad', info: 'text-info', violet: 'text-violet',
+  }
+  return (
+    <button onClick={onClick} className={clsx('surface group rounded-2xl px-4 py-3.5 text-left transition-transform duration-200 hover:-translate-y-0.5',
+      active && 'ring-2 ring-accent/30')}>
+      <div className="flex items-center gap-1.5 text-xs text-fg-3"><span className={color[tone]}>{icon}</span>{label}</div>
+      <motion.div key={value} initial={{ y: 6, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={spring}
+        className="tnum mt-1.5 text-[26px] leading-none font-semibold tracking-tight">{value}</motion.div>
+      {hint && <div className="mt-1.5 text-[11.5px] text-fg-3">{hint}</div>}
+    </button>
+  )
 }

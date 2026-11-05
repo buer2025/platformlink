@@ -3,55 +3,59 @@
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 /* 设计令牌：所有颜色从这里取，浅色/深色两套 */
+/* 浅色：暖调纸感中性色 + 墨蓝强调色 */
 :root {
-  --bg: #fbfbfc;
+  --bg: #f6f5f2;
   --panel: #ffffff;
-  --panel-2: #f5f6f8;
-  --line: #e7e8ec;
-  --line-strong: #d6d8de;
-  --fg: #16171d;
-  --fg-2: #5b5f6b;
-  --fg-3: #8c909c;
-  --accent: #5b5bd6;
+  --panel-2: #f3f2ee;
+  --line: rgb(28 25 20 / 0.08);
+  --line-strong: rgb(28 25 20 / 0.15);
+  --fg: #1c1b19;
+  --fg-2: #57534d;
+  --fg-3: #8f8a82;
+  --accent: #3d4fd6;
   --accent-fg: #ffffff;
-  --accent-soft: #eeeefc;
-  --ok: #18794e;
-  --ok-soft: #e9f6ef;
-  --warn: #a35200;
-  --warn-soft: #fff3e3;
-  --bad: #ce2c31;
-  --bad-soft: #fdecec;
-  --info: #0d74ce;
-  --info-soft: #e8f2fd;
-  --violet: #6e56cf;
-  --violet-soft: #f1edfd;
-  --shadow: 0 1px 2px rgb(16 17 26 / 0.04), 0 4px 16px rgb(16 17 26 / 0.06);
-  --shadow-lg: 0 8px 40px rgb(16 17 26 / 0.16);
+  --accent-soft: #eceefd;
+  --ok: #1f7a4d;
+  --ok-soft: #e7f4ec;
+  --warn: #a8570c;
+  --warn-soft: #fbf0e1;
+  --bad: #c4352f;
+  --bad-soft: #fbe9e7;
+  --info: #2b6cb0;
+  --info-soft: #e7f0fa;
+  --violet: #6b4fc8;
+  --violet-soft: #efebfb;
+  --highlight: rgb(255 255 255 / 0.9);
+  --shadow: 0 0 0 1px var(--line), 0 1px 2px rgb(28 25 20 / 0.04), 0 2px 8px -2px rgb(28 25 20 / 0.05);
+  --shadow-lg: 0 0 0 1px var(--line), 0 12px 48px -8px rgb(28 25 20 / 0.22), 0 4px 12px -4px rgb(28 25 20 / 0.08);
   color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0e0f13; --panel: #15161b; --panel-2: #1b1c22; --line: #25262d; --line-strong: #33343c;
-    --fg: #ececf1; --fg-2: #a4a7b3; --fg-3: #6f7280;
-    --accent: #7c7cf0; --accent-fg: #ffffff; --accent-soft: #23234a;
-    --ok: #4cc38a; --ok-soft: #12291e; --warn: #f1a10d; --warn-soft: #2e2210;
-    --bad: #ff6369; --bad-soft: #3b1219; --info: #70b8ff; --info-soft: #10243e;
-    --violet: #9e8cfc; --violet-soft: #231d3d;
-    --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 16px rgb(0 0 0 / 0.3);
-    --shadow-lg: 0 8px 40px rgb(0 0 0 / 0.5);
+    --bg: #111110; --panel: #191918; --panel-2: #21201e; --line: rgb(255 250 240 / 0.08); --line-strong: rgb(255 250 240 / 0.15);
+    --fg: #eeede9; --fg-2: #b5b2aa; --fg-3: #7c7972;
+    --accent: #8b97ff; --accent-fg: #0f1020; --accent-soft: rgb(139 151 255 / 0.14);
+    --ok: #5bc48b; --ok-soft: rgb(91 196 139 / 0.13); --warn: #e9a23b; --warn-soft: rgb(233 162 59 / 0.13);
+    --bad: #f0716b; --bad-soft: rgb(240 113 107 / 0.13); --info: #79b4f2; --info-soft: rgb(121 180 242 / 0.13);
+    --violet: #ab95f5; --violet-soft: rgb(171 149 245 / 0.14);
+    --highlight: rgb(255 255 255 / 0.04);
+    --shadow: 0 0 0 1px var(--line), 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow-lg: 0 0 0 1px var(--line-strong), 0 16px 56px -8px rgb(0 0 0 / 0.7);
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #0e0f13; --panel: #15161b; --panel-2: #1b1c22; --line: #25262d; --line-strong: #33343c;
-  --fg: #ececf1; --fg-2: #a4a7b3; --fg-3: #6f7280;
-  --accent: #7c7cf0; --accent-fg: #ffffff; --accent-soft: #23234a;
-  --ok: #4cc38a; --ok-soft: #12291e; --warn: #f1a10d; --warn-soft: #2e2210;
-  --bad: #ff6369; --bad-soft: #3b1219; --info: #70b8ff; --info-soft: #10243e;
-  --violet: #9e8cfc; --violet-soft: #231d3d;
-  --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 16px rgb(0 0 0 / 0.3);
-  --shadow-lg: 0 8px 40px rgb(0 0 0 / 0.5);
+  --bg: #111110; --panel: #191918; --panel-2: #21201e; --line: rgb(255 250 240 / 0.08); --line-strong: rgb(255 250 240 / 0.15);
+  --fg: #eeede9; --fg-2: #b5b2aa; --fg-3: #7c7972;
+  --accent: #8b97ff; --accent-fg: #0f1020; --accent-soft: rgb(139 151 255 / 0.14);
+  --ok: #5bc48b; --ok-soft: rgb(91 196 139 / 0.13); --warn: #e9a23b; --warn-soft: rgb(233 162 59 / 0.13);
+  --bad: #f0716b; --bad-soft: rgb(240 113 107 / 0.13); --info: #79b4f2; --info-soft: rgb(121 180 242 / 0.13);
+  --violet: #ab95f5; --violet-soft: rgb(171 149 245 / 0.14);
+  --highlight: rgb(255 255 255 / 0.04);
+  --shadow: 0 0 0 1px var(--line), 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-lg: 0 0 0 1px var(--line-strong), 0 16px 56px -8px rgb(0 0 0 / 0.7);
   color-scheme: dark;
 }
 
@@ -79,11 +83,23 @@
   --color-violet-soft: var(--violet-soft);
   --shadow-card: var(--shadow);
   --shadow-pop: var(--shadow-lg);
-  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans: "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 html, body { background: var(--bg); color: var(--fg); }
+body {
+  /* 顶部一层极淡的光，让页面有纵深 */
+  background-image: radial-gradient(1200px 420px at 60% -120px, color-mix(in oklab, var(--accent) 7%, transparent), transparent 70%);
+  background-attachment: fixed;
+  font-size: 14px;
+  letter-spacing: -0.006em;
+}
+.surface {
+  background: var(--panel);
+  box-shadow: var(--shadow), inset 0 1px 0 var(--highlight);
+}
+.tnum { font-variant-numeric: tabular-nums; }
 body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
