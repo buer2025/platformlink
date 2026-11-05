@@ -36,11 +36,16 @@ async def lifespan(_: FastAPI):
     await asyncio.to_thread(run_migrations)
     async with SessionLocal() as s:
         await recover_stuck(s)
-    task = asyncio.create_task(scheduler())
+    tasks = [asyncio.create_task(scheduler())]
+    if settings.telegram_mode == "polling" and settings.telegram_bot_token:
+        from app.im.telegram_poll import poll_forever
+
+        tasks.append(asyncio.create_task(poll_forever()))
     yield
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
+    for task in tasks:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
 
 app = FastAPI(title="PlatformLink", lifespan=lifespan)

@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     wecom_forward_secret: str = ""  # 存档拉取进程转发时带的 X-Forward-Secret
 
     telegram_bot_token: str = ""
+    # webhook：Telegram 推送到 /api/webhooks/telegram（需公网 HTTPS）
+    # polling：程序主动拉取消息（无公网地址时用，例如本地或内网部署）
+    telegram_mode: str = "webhook"
     feishu_app_id: str = ""
     feishu_app_secret: str = ""
     wecom_corp_id: str = ""
