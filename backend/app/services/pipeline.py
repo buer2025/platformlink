@@ -112,8 +112,10 @@ async def _handle_supplier_reply(session: AsyncSession, group: Group, msg: Messa
     if RESOLVED_HINT.search(msg.text):
         customer = await session.get(Group, incident.group_id)
         origin = await session.get(Message, incident.message_id)
-        text = await llm.stylize("上游反馈已经处理好了，麻烦再试一下，有问题随时说～",
-                                 customer.style, "customer_reply")
+        text = await llm.compose(
+            "告诉客户上游已经处理好了，请他再试一下，有问题随时说",
+            f"客户最初的问题: {incident.summary}\n供应商刚才的回复: {msg.text}",
+            customer.style, "上游反馈已经处理好了，麻烦再试一下，有问题随时说～")
         # 供应商说修好，需人工复核或 10 分钟倒计时后通知客户
         await presend.enqueue(session, customer, text, 75, "customer_reply", incident.id,
                               reply_to=origin.external_id if origin else "")
@@ -122,10 +124,16 @@ async def _handle_supplier_reply(session: AsyncSession, group: Group, msg: Messa
 async def _active_incident(session: AsyncSession, group: Group) -> Incident | None:
     """群里最近仍在处理中的事件（用于承接不像新问题的追问）。"""
     since = presend.utcnow() - timedelta(hours=settings.conversation_hours)
-    rows = (await session.scalars(select(Incident).where(
-        Incident.group_id == group.id, Incident.status != IncidentStatus.resolved,
-    ).order_by(Incident.id.desc()).limit(5))).all()
-    return next((i for i in rows if presend.aware(i.created_at) >= since), None)
+    rows = (await session.scalars(select(Incident).where(Incident.group_id == group.id)
+                                  .order_by(Incident.id.desc()).limit(5))).all()
+    for i in rows:
+        if i.status != IncidentStatus.resolved and presend.aware(i.created_at) >= since:
+            return i
+        # 刚解决不久：客户说「好了谢谢」「又不行了」都还算这段对话
+        if i.status == IncidentStatus.resolved and i.resolved_at and \
+                presend.aware(i.resolved_at) >= presend.utcnow() - timedelta(hours=2):
+            return i
+    return None
 
 
 async def _mergeable(session: AsyncSession, group: Group, category: str) -> Incident | None:
@@ -262,10 +270,7 @@ async def _respond_followup(session: AsyncSession, group: Group, incident: Incid
     force_confirm = bool(wf and wf.automation == "confirm")
     conv, latest, _ = await _conversation(session, incident)
     last = replies[0] if replies else None
-    if llm._NO_REPLY.match(m.text.strip()):  # 「好的」「谢谢」：不打断待发回复，也不回复
-        record(session, incident.id, "no_reply", f"「{m.text}」无需回复")
-        return
-    if last and last.status in presend.RETRYABLE:
+    if last and last.status in presend.RETRYABLE and incident.status != IncidentStatus.resolved:
         text = await llm.integrate(last.text, conv, _progress(incident))
         text = await llm.stylize(text, group.style, "customer_reply")
         last.status = OutboundStatus.cancelled
@@ -274,7 +279,8 @@ async def _respond_followup(session: AsyncSession, group: Group, incident: Incid
         record(session, incident.id, "integrated", "客户追加了消息，未发出的回复已改写为整合版")
         return
     # 已经回复过：判断这条是不是在继续追问，是才回复
-    d = await llm.followup(conv, m.text, _progress(incident), quoted)
+    d = await llm.followup(conv, m.text, _progress(incident), quoted,
+                           resolved=incident.status == IncidentStatus.resolved)
     if d.problem_persists and incident.status == IncidentStatus.resolved:
         incident.status = IncidentStatus.investigating
         incident.resolved_at = None
@@ -351,15 +357,6 @@ async def handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident |
     if quoted is not None and quoted.incident_id:
         return await _handle_quote(session, group, msg, m, quoted)
 
-    # 第 0 层（不调用 AI）：「好的」「谢谢」「👍」这类确认语，只记录不处理
-    if quoted is None and llm._NO_REPLY.match(m.text.strip()):
-        if active := await _active_incident(session, group):
-            msg.incident_id = active.id
-            active.related_messages += 1
-            record(session, active.id, "no_reply", f"「{m.text}」无需回复", actor=m.sender)
-        await session.commit()
-        return None
-
     # 第 1 层：轻量分诊（低思考强度，判断是不是问题、抽取字段）
     c = await llm.classify(m.text if quoted is None else f"{m.text}\n（引用了：「{quoted.text}」）")
     if not c.is_issue:
@@ -400,7 +397,9 @@ async def handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident |
            f"类别 {c.category}，模型 {c.model or '未知'}，request_id {c.request_id or '无'}；"
            f"链路：{wf.name if wf else '默认'}")
 
-    ack = await llm.stylize("收到，正在排查，稍等～", group.style, "ack")
+    ack = await llm.compose(
+        "先回应客户这条消息（共情他的着急），告诉他收到了、这就去查。不要猜原因，也不要说「还没头绪 / 还没看出原因」",
+        f"客户刚发的消息: {m.text}", group.style, "收到，正在排查，稍等～")
     await presend.enqueue(session, group, ack, 100, "ack", incident.id, reply_to=m.message_id)
     await session.commit()
 

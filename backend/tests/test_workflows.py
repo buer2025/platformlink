@@ -152,6 +152,9 @@ class ScriptedClaude:
         self.script, self.calls = list(script), []
         self.messages = self
 
+    async def parse(self, **kw):
+        raise ValueError("剧本只覆盖工具循环")  # 其他 AI 调用走兜底
+
     async def create(self, **kw):
         import anthropic.types as at
         self.calls.append(kw)
@@ -377,15 +380,25 @@ async def test_escalation_in_customer_group_without_internal(client, fake):  # n
     assert esc["group_id"] == cid and esc["mentions"] == ["zhang"] and "负责的同事" in esc["text"]
 
 
-async def test_acks_skip_ai(client, fake, monkeypatch):  # noqa: F811
+async def test_acks_are_decided_by_ai(client, fake, monkeypatch):  # noqa: F811
+    """「谢谢」「好的」交给 AI 判断：问题解决后的致谢可以自然地回一句，不走固定模板。"""
     from app.agent import llm
     await setup_groups(client)
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 101, "seedance 报错了"))
+    inc = (await client.get("/api/incidents")).json()[0]
+    await client.patch(f"/api/incidents/{inc['id']}", json={"status": "resolved"})
+    calls = []
 
-    async def boom(_):
-        raise AssertionError("确认语不应调用分诊")
-    monkeypatch.setattr(llm, "classify", boom)
-    for i, t in enumerate(["好的", "👍", "收到~", "谢谢啦"]):
-        await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 96 + i, t))
+    async def ai_followup(conv, new_text, context, quoted="", resolved=False):
+        calls.append((new_text, resolved))
+        return llm.FollowupDecision(should_reply=True, problem_persists=False,
+                                    reason="客户致谢，礼貌回应", text="不客气～有事随时找我")
+    monkeypatch.setattr(llm, "followup", ai_followup)
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 102, "好了，谢谢！"))
+    assert calls == [("好了，谢谢！", True)]
+    last = (await outbound(client))[0]
+    assert last["text"] == "不客气～有事随时找我" and last["purpose"] == "customer_reply"
+    assert (await client.get(f"/api/incidents/{inc['id']}")).json()["status"] == "resolved"
 
 
 async def test_session_lifecycle_memory(client, fake, monkeypatch):  # noqa: F811

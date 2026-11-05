@@ -146,8 +146,10 @@ async def remind_suppliers(session: AsyncSession) -> int:
         supplier = await session.get(Group, inc.supplier_group_id)
         from app.agent import llm  # 避免循环导入
 
-        text = await llm.stylize("麻烦帮忙看下上面这个问题，客户那边还在等，辛苦～",
-                                 supplier.style, "supplier_remind")
+        text = await llm.compose(
+            "客气地催一下供应商处理上面转交的问题，客户那边还在等",
+            f"问题: {inc.summary}\n已转交 {settings.supplier_remind_minutes * (inc.reminders + 1)} 分钟，"
+            f"这是第 {inc.reminders + 1} 次催", supplier.style, "麻烦帮忙看下上面这个问题，客户那边还在等，辛苦～")
         ticket = await session.scalar(select(Message).where(
             Message.incident_id == inc.id, Message.group_id == supplier.id,
             Message.from_us.is_(True)).order_by(Message.id))

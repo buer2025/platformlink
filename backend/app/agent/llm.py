@@ -174,7 +174,8 @@ async def integrate(draft: str, conversation: str, context: str) -> str:
 
 class FollowupDecision(BaseModel):
     should_reply: bool = Field(description="这条消息是否需要我们回复")
-    problem_persists: bool = Field(description="客户是否在说问题还在 / 又出现了 / 没解决")
+    problem_persists: bool = Field(description="仅当客户这条消息本身明确说问题还在 / 又出现 / 没解决时为 true；"
+                                               "「好的」「收到」、表情、致谢一律为 false（不看事件本身是否已解决）")
     reason: str = Field(description="一句话说明判断理由")
     text: str = Field(description="回复内容；不需要回复时为空")
 
@@ -182,11 +183,17 @@ class FollowupDecision(BaseModel):
 PERSISTS = re.compile(r"(还是|依然|仍然|又|再次|没好|没解决|不行|还在报|还报)")
 
 
-async def followup(conversation: str, new_text: str, context: str, quoted: str = "") -> FollowupDecision:
+async def followup(conversation: str, new_text: str, context: str, quoted: str = "",
+                   resolved: bool = False) -> FollowupDecision:
     """客户在已有事件里又说话（可能引用了某条消息）：判断要不要回、问题是否还在，并起草回复。"""
     q = f"\n客户引用的消息: 「{quoted}」" if quoted else ""
     r = await _parse(
-        FOLLOWUP + "\n先判断：这条是在继续追问/反馈问题，还是致谢、闲聊、玩笑。只有前者需要回复。"
+        FOLLOWUP + "\n先判断这条消息的意图，再决定要不要回：\n"
+        "- 继续追问、反馈问题还在、补充信息 → 回复。\n"
+        "- 对我们进展通报的「好的」「收到」「👍」→ 不回，避免刷屏。\n"
+        "- 问题已解决后客户致谢（如「好了谢谢」）→ 简短暖心地回一句收个尾（例如不客气、有事随时找我），"
+        "不要再复述问题。\n"
+        "- 闲聊、玩笑 → 一般不回；客户明显在跟我们互动时可以轻松回一句。\n"
         "如果客户引用了我们的某条回复，要结合被引用的内容理解他在问什么。",
         f"客户消息（按时间）:\n{conversation}\n\n客户最新这条: {new_text}{q}\n\n处理进展:\n{context}",
         FollowupDecision, effort="low")
@@ -194,10 +201,12 @@ async def followup(conversation: str, new_text: str, context: str, quoted: str =
         if not r.should_reply:
             r.text = ""
         return r
-    if _NO_REPLY.match(new_text.strip()):
-        return FollowupDecision(should_reply=False, problem_persists=False, reason="致谢 / 确认", text="")
-    return FollowupDecision(should_reply=True, problem_persists=bool(PERSISTS.search(new_text)),
-                            reason="规则兜底", text="收到，这边还在跟进，有进展第一时间同步您～")
+    # 以下仅在 AI 不可用时兜底
+    persists = bool(PERSISTS.search(new_text))
+    if _NO_REPLY.match(new_text.strip()) or (resolved and not persists):  # 兜底时宁可不回
+        return FollowupDecision(should_reply=False, problem_persists=False, reason="AI 不可用，规则兜底：无需回复", text="")
+    return FollowupDecision(should_reply=True, problem_persists=persists,
+                            reason="AI 不可用，规则兜底", text="收到，这边还在跟进，有进展第一时间同步您～")
 
 
 _NO_REPLY = re.compile(
@@ -262,6 +271,29 @@ async def summarize_memory(transcript: str) -> str:
         "「seedance 上游 429，已协调扩容；客户做直播，很在意恢复时间」。只写记录里出现过的事实，60 字以内。",
         transcript, Memory, effort="low")
     return r.text.strip() if r else ""
+
+
+COMPOSE = """你是我方技术支持，在 IM 群里亲自打字回复。根据「要表达的意思」和「上下文」写一条消息。
+
+要求：
+- 像真人当下打出来的话：回应对方刚说的具体内容，不要套话、不要每次都一样的句式。
+- 只表达给定的意思，不编造事实、不做原文没有的承诺。
+- 简短：1~2 句。不要套用「有结果第一时间跟您说」这类固定结尾，换着说或干脆不说。
+- 按群风格说话（称呼、语气词、表情克制使用），问候语要和当前时间相符。
+- 只输出消息本身。"""
+
+
+async def compose(intent: str, context: str, style: dict, fallback: str) -> str:
+    """让 AI 按上下文和群风格直接写一条短消息；AI 不可用时用 fallback（再做基本称呼处理）。"""
+    r = await _parse(
+        COMPOSE,
+        f"要表达的意思: {intent}\n当前时间: {_now_cn()}\n\n上下文:\n{context}\n\n"
+        f"群风格:\n{describe_style(style or {}) or '（未设置，用自然、专业亲和的语气）'}",
+        Rewrite, effort="low")
+    if r and r.text.strip():
+        return r.text.strip()
+    address = (style or {}).get("address")
+    return f"{address}，{fallback}" if address and address not in fallback else fallback
 
 
 async def stylize(text: str, style: dict, purpose: str) -> str:

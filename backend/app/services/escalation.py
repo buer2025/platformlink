@@ -41,7 +41,8 @@ async def escalate(session: AsyncSession, group: Group, incident: Incident, reas
         record(session, incident.id, "escalated", f"已在内部群「{internal.name}」@ "
                f"{'、'.join(owners) or '（未设置负责人）'}：{reason}")
     elif owners:
-        text = await llm.stylize("这个问题我拉一下负责的同事一起看下，稍等哈", group.style, "escalation")
+        text = await llm.compose("告诉客户我拉负责的同事一起来看这个问题", f"问题: {incident.summary}",
+                                 group.style, "这个问题我拉一下负责的同事一起看下，稍等哈")
         await presend.enqueue(session, group, text, 100, "escalation", incident.id,
                               mentions=await _accounts(session, group.platform, owners))
         record(session, incident.id, "escalated", f"在客户群 @ {'、'.join(owners)}：{reason}")
