@@ -74,6 +74,10 @@ cd backend && uv run python -m evals.run
 
 覆盖分诊、责任方判断（基于 new-api 模拟日志）、证据不足封顶、不泄露内部信息、跟进时该不该回、风格禁忌与克制。用例在 `backend/evals/cases.py`，遇到判断错的真实案例就补一条进去。
 
+## 操作审计
+
+「操作审计」页（仅管理员）记录所有操作：后台每一次修改、登录与失败尝试、权限拒绝，平台回调、Agent 处理、定时任务和自动发送，以及数据库查询耗时（new-api 日志库每条都记，业务库记慢查询）。密码和密钥自动打码。相关配置：`SLOW_QUERY_MS`、`AUDIT_READS`、`RECORD_RETENTION_DAYS`（见 `backend/.env.example`）。
+
 ## 键盘操作
 
 `⌘K` 命令面板 · `G` 然后 `P/I/W/K/G/S` 切换页面 · `J/K` 上下 · `↵` 打开 · `⌘↵` 发送/保存 · `E` 修改 · `R` 标记解决 · `C` 新建 · `⇧T` 主题 · `?` 全部快捷键

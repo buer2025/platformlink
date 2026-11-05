@@ -65,13 +65,16 @@ async def current_actor(authorization: str = Header(default=""),
                         s: AsyncSession = DbSession) -> Actor:
     from app.services.presend import aware, utcnow
     token = authorization.removeprefix("Bearer ").strip()
+    from app.services import audit
     if _eq(token, settings.admin_token):
+        audit.set_actor(None, "管理员（ADMIN_TOKEN）", UserRole.admin)
         return Actor(None, "管理员", UserRole.admin)
     if token:
         sess = await s.scalar(select(ApiSession).where(ApiSession.token_hash == _token_hash(token)))
         if sess and aware(sess.expires_at) > utcnow():
             user = await s.get(User, sess.user_id)
             if user and user.active:
+                audit.set_actor(user.id, user.display_name, user.role)
                 return Actor(user.id, user.display_name, user.role)
     raise HTTPException(401, "未登录或登录已过期")
 

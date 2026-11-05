@@ -314,3 +314,50 @@ class ModelCall(Base):
     request: Mapped[str] = mapped_column(Text, default="")
     response: Mapped[str] = mapped_column(Text, default="")
     error: Mapped[str] = mapped_column(Text, default="")
+
+
+class AuditLog(Base):
+    """操作审计：后台每个写操作、登录登出、权限拒绝、平台回调、定时任务、Agent 处理与自动发送。"""
+
+    __tablename__ = "audit_logs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+    trace_id: Mapped[str] = mapped_column(String(32), index=True)  # 关联这次操作里的数据库查询
+    source: Mapped[str] = mapped_column(String(20), index=True)  # http / webhook / scheduler / agent / system
+    actor: Mapped[str] = mapped_column(String(100), default="", index=True)
+    actor_id: Mapped[int | None] = mapped_column(Integer)
+    role: Mapped[str] = mapped_column(String(20), default="")
+    action: Mapped[str] = mapped_column(String(100), index=True)
+    method: Mapped[str] = mapped_column(String(10), default="")
+    path: Mapped[str] = mapped_column(String(300), default="")
+    target: Mapped[str] = mapped_column(String(100), default="")
+    status: Mapped[int] = mapped_column(Integer, default=0)  # HTTP 状态码；非 HTTP 操作成功为 0
+    ok: Mapped[bool] = mapped_column(default=True, index=True)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    db_count: Mapped[int] = mapped_column(Integer, default=0)  # 这次操作执行的 SQL 条数
+    db_ms: Mapped[int] = mapped_column(Integer, default=0)  # 其中花在数据库上的时间
+    ip: Mapped[str] = mapped_column(String(64), default="")
+    user_agent: Mapped[str] = mapped_column(String(300), default="")
+    request: Mapped[str] = mapped_column(Text, default="")  # 请求参数（密码、密钥已打码）
+    detail: Mapped[str] = mapped_column(Text, default="")
+    incident_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    group_id: Mapped[int | None] = mapped_column(Integer)
+
+
+class DbQuery(Base):
+    """数据库查询耗时：new-api 日志库的每一次查询；业务库超过阈值的慢查询。"""
+
+    __tablename__ = "db_queries"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+    trace_id: Mapped[str] = mapped_column(String(32), default="", index=True)
+    db: Mapped[str] = mapped_column(String(20), index=True)  # app / newapi
+    op: Mapped[str] = mapped_column(String(10), default="")  # select / insert / update / delete …
+    caller: Mapped[str] = mapped_column(String(100), default="")  # 发起查询的业务函数
+    statement: Mapped[str] = mapped_column(Text, default="")
+    params: Mapped[str] = mapped_column(Text, default="")
+    duration_ms: Mapped[float] = mapped_column(default=0.0)
+    rows: Mapped[int] = mapped_column(Integer, default=-1)
+    error: Mapped[str] = mapped_column(Text, default="")
+    incident_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    group_id: Mapped[int | None] = mapped_column(Integer)

@@ -48,6 +48,9 @@ class Evidence:
 class LogDB:
     def __init__(self, url: str):
         self.engine: AsyncEngine = create_async_engine(url, pool_pre_ping=True)
+        from app.services import audit
+
+        audit.instrument(self.engine, "newapi")  # 日志库的每次查询都记耗时
         self._tables: dict[str, Table | None] = {}
 
     async def table(self, name: str) -> Table | None:

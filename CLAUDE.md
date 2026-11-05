@@ -37,7 +37,8 @@ backend/app/
     presend.py   预发队列：评分 → 倒计时 → 发送；卡住恢复；供应商催办
     lease.py     数据库租约（多进程协调）
     trace.py     模型调用留存（TracedClient、RUNNING 实时表、批量写入）
-  api/           routes.py 主要接口；calls.py 模型调用与 /live 实时进度
+    audit.py     操作审计 + 数据库查询计时（ASGI 中间件、audit.op、SQLAlchemy 事件）；retention.py 过期清理
+  api/           routes.py 主要接口；calls.py 模型调用与 /live 实时进度；audit.py 审计与查询耗时
 backend/evals/   cases.py 用例、run.py 评估、jev_compare.py Jev vs Claude 对比
 frontend/src/    pages/ 各页面；components/；api.ts 类型与请求；ui.tsx 基础组件
 e2e/smoke.cjs    端到端冒烟（含移动端溢出检查）
@@ -52,6 +53,10 @@ e2e/smoke.cjs    端到端冒烟（含移动端溢出检查）
 - **结构化输出字段要设为必填**：带默认值的字段模型常会直接略过（`reply_kind`、`Finding.self_check` 都踩过）。新增字段时设必填，并在提示词里说明怎么填。
 - **AI 不可用时必须有规则兜底**，兜底结果置信度低、走人工审批。测试默认不连真实模型（conftest 把 `JEV_MODEL` 设为空）。
 - **模型调用都要能追踪**：新建 Anthropic 客户端用 `llm._client()`（已包 `TracedClient`）；入口处用 `trace.scope()` / `trace.bind(...)` 绑定 group / incident / message。
+- **所有操作都要留痕**：后台接口自动由 `audit.Middleware` 记录（新增接口记得在 `audit.ACTIONS` 里加中文名）；
+  新的后台任务 / 非 HTTP 操作用 `async with audit.op(source, "中文动作名") as o:`，没做事时 `o.skip = True`，
+  过程说明用 `audit.note(...)`。新的外部数据库引擎用 `audit.instrument(engine, "名字")` 挂上计时。
+  请求参数里的密码、token、secret 会自动打码；新增敏感字段时确认 `audit.SECRET_KEYS` / `_SECRET_COLS` 能覆盖。
 - **实时进度依赖及时提交**：长流程（排查循环）在每次工具调用后、`harness.run` 前提交，否则 SQLite 写锁会让时间线和进度看起来卡住。
 - **置信度不能虚高**：证据有矛盾 → 最高 70；没有强证据 → 60；只有 1 条强证据 → 80。改排查逻辑时保持这套封顶，并补测试（`backend/tests/test_evidence.py`）。
 - **时间**：库里存 UTC（读出来可能是 naive，用 `presend.aware()`）；展示给人看的时间按 `settings.timezone`（Asia/Shanghai）。
@@ -74,7 +79,8 @@ docker compose exec db pg_dump -U platformlink platformlink > backup-$(date +%F)
 - 前面要加 HTTPS 反向代理（Telegram / 飞书回调要求 HTTPS），应用以 `--proxy-headers` 启动。没有公网地址时 Telegram 用 `TELEGRAM_MODE=polling`。
 - 生产用 PostgreSQL；可以开多 worker 或多副本（租约协调），SQLite 只适合单进程开发。
 - `/healthz` 是健康检查。
-- `model_calls` 表会持续增长（每次模型调用一行，含请求/响应）：需要定期清理或归档。
+- `model_calls`、`audit_logs`、`db_queries` 会持续增长：默认永久保留，`RECORD_RETENTION_DAYS=N` 自动删除 N 天前的记录（删除前先备份）。
+- 反代后面要拿到真实客户端 IP（审计里记录）：uvicorn 加 `--forwarded-allow-ips=<反代 IP>`。
 - new-api 日志库用**只读账号**；`NEWAPI_ADMIN_TOKEN` 的渠道实测每次会向上游发一次真实请求。
 - 运维排查改动时，先在测试库或备份上验证迁移，再升级生产。
 

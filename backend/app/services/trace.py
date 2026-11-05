@@ -129,7 +129,23 @@ def _push(op: str, call_id: str, data: dict) -> None:
         pass
 
 
+_locks: dict[int, asyncio.Lock] = {}
+
+
+def _lock() -> asyncio.Lock:
+    """写入锁（按事件循环区分）：后台写入任务和 flush() 不能同时写同一批，否则会重复落库。"""
+    loop = asyncio.get_running_loop()
+    if (lk := _locks.get(id(loop))) is None:
+        lk = _locks[id(loop)] = asyncio.Lock()
+    return lk
+
+
 async def _write_batch() -> None:
+    async with _lock():
+        await _write_batch_unlocked()
+
+
+async def _write_batch_unlocked() -> None:
     batch = _ops[:500]
     if not batch:
         return
@@ -150,6 +166,9 @@ async def _write_batch() -> None:
 
 
 async def _write_forever() -> None:
+    from app.services import audit
+
+    audit._suppress.set(True)  # 留存写入自己的 SQL 不计入审计
     while True:
         if not _ops:
             _wake.clear()

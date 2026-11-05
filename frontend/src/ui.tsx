@@ -54,7 +54,8 @@ const field = 'w-full rounded-lg border border-line bg-panel px-2.5 text-[13px] 
 
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
   function Input({ className, ...p }, ref) {
-    return <input ref={ref} {...p} className={clsx(field, 'h-8', className)} />
+    const sized = /(^|\s)w-/.test(className ?? '')  // 同 Select：传了宽度就不强制 w-full
+    return <input ref={ref} {...p} className={clsx(sized ? field.replace('w-full ', 'shrink-0 ') : field, 'h-8', className)} />
   })
 
 export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(

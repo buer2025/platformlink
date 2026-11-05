@@ -18,6 +18,7 @@ from app.models import (
     Outbound,
     OutboundStatus,
 )
+from app.services import audit
 from app.services.events import PURPOSE_NAMES, record
 from app.services.style import style_of
 
@@ -122,6 +123,7 @@ async def deliver(session: AsyncSession, item: Outbound, allowed=OPEN) -> bool:
         item.error = str(e)[:1000] or e.__class__.__name__
         record(session, item.incident_id, "send_failed",
                f"{PURPOSE_NAMES.get(item.purpose, item.purpose)}发送失败：{item.error}")
+        audit.note(f"预发消息 #{item.id} 发送失败 → {group.name}：{item.error}")
         await session.commit()
         return False
     item.status = OutboundStatus.sent
@@ -134,6 +136,7 @@ async def deliver(session: AsyncSession, item: Outbound, allowed=OPEN) -> bool:
     session.add(Message(group_id=group.id, external_id=ext_id, sender=sender,
                         text=item.text, reply_to_external_id=item.reply_to_external_id,
                         from_us=True, incident_id=item.incident_id))
+    audit.note(f"预发消息 #{item.id}（{PURPOSE_NAMES.get(item.purpose, item.purpose)}）已发送 → {group.name}")
     record(session, item.incident_id, "sent",
            f"{PURPOSE_NAMES.get(item.purpose, item.purpose)}已发送到 {group.name}：{item.text}",
            actor=item.edited_by or "agent")

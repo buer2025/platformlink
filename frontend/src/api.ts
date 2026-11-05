@@ -259,3 +259,62 @@ export const clock = (s: string | null, seconds = false) => {
   const p = (n: number) => String(n).padStart(2, '0')
   return `${p(d.getHours())}:${p(d.getMinutes())}` + (seconds ? `:${p(d.getSeconds())}` : '')
 }
+
+export type AuditSource = 'http' | 'webhook' | 'agent' | 'scheduler' | 'system'
+
+export type AuditLog = {
+  id: number
+  created_at: string
+  trace_id: string
+  source: AuditSource
+  actor: string
+  actor_id: number | null
+  role: string
+  action: string
+  method: string
+  path: string
+  target: string
+  status: number
+  ok: boolean
+  latency_ms: number
+  db_count: number
+  db_ms: number
+  ip: string
+  incident_id: number | null
+  group_id: number | null
+}
+
+export type DbQuery = {
+  id: number
+  created_at: string
+  trace_id: string
+  db: 'app' | 'newapi' | string
+  op: string
+  caller: string
+  statement: string
+  params: string
+  duration_ms: number
+  rows: number
+  error: string
+  incident_id: number | null
+  group_id: number | null
+}
+
+export type AuditDetail = AuditLog & { user_agent: string; request: string; detail: string; queries: DbQuery[] }
+
+export type AuditStats = { source: AuditSource; count: number; failed: number; actors: number }[]
+
+export type DbQueryStats = {
+  dbs: { db: string; count: number; errors: number; avg_ms: number; p50_ms: number; p95_ms: number; max_ms: number }[]
+  callers: { db: string; caller: string; count: number; total_ms: number; avg_ms: number; max_ms: number }[]
+  sampled: number
+}
+
+export const auditSourceLabel: Record<AuditSource, string> = {
+  http: '后台操作', webhook: '平台回调', agent: 'Agent', scheduler: '定时任务', system: '系统',
+}
+
+export const dbLabel: Record<string, string> = { app: '业务库', newapi: 'new-api 日志库' }
+
+/** 毫秒：<1 显示一位小数，≥1000 显示秒。 */
+export const fmtMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : ms < 10 ? `${ms.toFixed(1)}ms` : `${Math.round(ms)}ms`)

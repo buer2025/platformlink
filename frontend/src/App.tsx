@@ -3,7 +3,7 @@ import clsx from 'clsx'
 import { Command } from 'cmdk'
 import {
   BarChart3, BookOpen, Gauge, Inbox, ShieldCheck, LogOut, Monitor, Moon, Search, Sun, Users, Workflow as WorkflowIcon, Zap, MessagesSquare,
-  Keyboard, Cpu,
+  Keyboard, Cpu, ScrollText,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
@@ -22,6 +22,7 @@ const KnowledgePage = lazy(() => import('./pages/Knowledge'))
 const Incidents = lazy(() => import('./pages/Incidents'))
 const Groups = lazy(() => import('./pages/Groups'))
 const CallsPage = lazy(() => import('./pages/Calls'))
+const AuditPage = lazy(() => import('./pages/Audit'))
 import { Avatar, Kbd, Skeleton, Switch } from './ui'
 
 function useAuthed() {
@@ -227,6 +228,12 @@ function Shell() {
             <ShieldCheck size={16} className="text-fg-3" />账号与值班
           </NavLink>
         )}
+        {me?.role === 'admin' && (
+          <NavLink to="/audit" className={({ isActive }) => clsx('mt-0.5 flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors',
+            isActive ? 'bg-panel-2 font-medium text-fg' : 'text-fg-2 hover:bg-panel-2 hover:text-fg')}>
+            <ScrollText size={16} className="text-fg-3" />操作审计
+          </NavLink>
+        )}
         {me && (
           <div className="mt-auto mb-2 flex items-center gap-2.5 rounded-xl px-2 py-2">
             <Avatar name={me.name} size={28} />
@@ -274,6 +281,7 @@ function Shell() {
                 <Route path="/quota" element={<QuotaPage />} />
                 <Route path="/calls" element={<CallsPage />} />
                 <Route path="/users" element={me && me.role !== 'admin' ? <Navigate to="/presend" replace /> : <UsersPage />} />
+                <Route path="/audit" element={me && me.role !== 'admin' ? <Navigate to="/presend" replace /> : <AuditPage />} />
                 <Route path="*" element={<Navigate to="/presend" replace />} />
               </Routes>
               </Suspense>

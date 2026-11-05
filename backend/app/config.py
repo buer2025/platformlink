@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     work_hours: str = "09:00-21:00"
     work_days: list[int] = [1, 2, 3, 4, 5, 6, 7]
     timezone: str = "Asia/Shanghai"
+    # 审计：业务库单条 SQL 超过这个毫秒数就单独记录（0 = 每条都记，量很大）；new-api 日志库的查询每条都记
+    slow_query_ms: float = 100.0
+    # 是否也记录只读请求（GET）。默认只记写操作、登录、权限拒绝和出错的请求
+    audit_reads: bool = False
+    # 审计、数据库查询、模型调用记录保留天数；0 = 永久保留
+    record_retention_days: int = 0
     # 供应商转交单无回复多久后催办，最多催几次
     supplier_remind_minutes: int = 30
     supplier_max_reminders: int = 2

@@ -69,7 +69,7 @@ from app.schemas import (
     WorkflowIn,
     WorkflowOut,
 )
-from app.services import knowledge, memory, pipeline, presend, quota, stats
+from app.services import audit, knowledge, memory, pipeline, presend, quota, stats
 from app.services.events import record
 from app.services.pipeline import handle_inbound
 from app.services.style import style_of
@@ -116,6 +116,7 @@ async def login(body: LoginIn, s: AsyncSession = Session):
     user = await s.scalar(select(User).where(User.username == body.username.strip()))
     if not user or not user.active or not check_password(body.password, user.password_hash):
         raise HTTPException(401, "用户名或密码错误")
+    audit.set_actor(user.id, user.display_name, user.role)
     return {"token": await create_session(s, user), "name": user.display_name, "role": user.role}
 
 

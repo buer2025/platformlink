@@ -26,7 +26,7 @@ from app.models import (
     Staff,
     Workflow,
 )
-from app.services import knowledge, lease, memory, presend, trace
+from app.services import audit, knowledge, lease, memory, presend, trace
 from app.services.assign import auto_assign
 from app.services.escalation import escalate
 from app.services.events import record
@@ -421,10 +421,16 @@ _group_locks: dict[tuple[str, str], asyncio.Lock] = defaultdict(asyncio.Lock)
 
 async def handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident | None:
     key = (m.platform, m.chat_id)
-    async with _group_locks[key], lease.hold(f"group:{m.platform}:{m.chat_id}"), trace.scope():
+    async with _group_locks[key], lease.hold(f"group:{m.platform}:{m.chat_id}"), trace.scope(), \
+            audit.op("agent", "处理群消息", actor="Agent", target=f"{m.platform}:{m.chat_name or m.chat_id}"[:100],
+                     detail=f"{m.sender}：{m.text[:300]}") as o:
         try:
-            return await _handle_inbound(session, m)
+            incident = await _handle_inbound(session, m)
+            o.note(f"→ 事件 #{incident.id}" if incident else "→ 无需处理")
+            return incident
         except Exception as e:
+            o.ok = False
+            o.note(f"出错：{type(e).__name__}: {e}"[:2000])
             log.exception("处理消息失败 %s/%s", m.platform, m.chat_id)
             await session.rollback()
             await _on_failure(session, m, e)

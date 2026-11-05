@@ -198,11 +198,32 @@ async function api(path, body, method) {
   await page.getByRole('button', { name: /^模型调用 \d+/ }).click()
   await page.getByText(/还没有模型调用|次调用/).waitFor()
   check(true, '事件抽屉可查看模型调用')
+  await page.getByRole('button', { name: '日志查询' }).click()
+  await page.getByText(/还没有日志库查询|次查询/).waitFor()
+  check(true, '事件抽屉可查看日志查询耗时')
   await page.keyboard.press('Escape')
   await page.goto(BASE + '/calls')
   await page.getByRole('heading', { name: '模型调用' }).waitFor()
   await page.getByText('24 小时调用').waitFor()
   check(true, '模型调用页可访问')
+
+  // 操作审计：刚才的认领、登录都应该留痕
+  await page.goto(BASE + '/audit')
+  await page.waitForURL(/\/presend/)
+  check(true, '技术支持访问操作审计被拦回')
+  const adm = await browser.newPage()
+  await adm.addInitScript((t) => localStorage.setItem('platformlink.token', t), TOKEN)
+  await adm.goto(BASE + '/audit')
+  await adm.getByRole('heading', { name: '操作审计' }).waitFor()
+  const claim = adm.locator('li', { hasText: '修改事件' }).filter({ hasText: '小张' }).first()
+  await claim.waitFor()
+  await claim.locator('button').first().click()
+  await adm.getByText('参数（敏感字段已打码）').first().waitFor()
+  check(true, '操作审计记录了技术支持的认领操作，可展开查看参数')
+  await adm.getByRole('button', { name: '数据库查询' }).click()
+  await adm.getByText('24 小时日志库查询').waitFor()
+  check(true, '数据库查询耗时页可访问')
+  await adm.close()
 
   // 刷新保持登录、深链接
   await page.goto(BASE + '/groups')
@@ -212,7 +233,7 @@ async function api(path, body, method) {
   // 手机端
   const phone = await browser.newPage({ viewport: { width: 375, height: 740 } })
   await phone.addInitScript((t) => localStorage.setItem('platformlink.token', t), TOKEN)
-  for (const p of ['/presend', '/incidents', '/quota', '/workflows', '/knowledge', '/groups', '/staff', '/stats', '/calls']) {
+  for (const p of ['/presend', '/incidents', '/quota', '/workflows', '/knowledge', '/groups', '/staff', '/stats', '/calls', '/audit']) {
     await phone.goto(BASE + p)
     await phone.waitForTimeout(600)
     const overflow = await phone.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)

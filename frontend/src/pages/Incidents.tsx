@@ -19,6 +19,7 @@ import {
 import { Composer } from '../components/Composer'
 import { KnowledgeEditor } from './Knowledge'
 import { LiveProgress } from '../components/LiveProgress'
+import { IncidentQueries } from '../components/DbQueries'
 import { IncidentCalls, useCallCount } from '../components/ModelCalls'
 
 const statusLabel: Record<Incident['status'], [string, Tone]> = {
@@ -199,7 +200,7 @@ function IncidentDrawer({ i, groups, workflows, onClose }: {
 }) {
   const qc = useQueryClient()
   const [note, setNote] = useState('')
-  const [tab, setTab] = useState<'timeline' | 'messages' | 'calls'>('timeline')
+  const [tab, setTab] = useState<'timeline' | 'messages' | 'calls' | 'queries'>('timeline')
   const [draft, setDraft] = useState<Partial<Knowledge> | null>(null)
   const [quote, setQuote] = useState<Message | null>(null)
   const now = useNow(30000)
@@ -275,10 +276,11 @@ function IncidentDrawer({ i, groups, workflows, onClose }: {
             { value: 'timeline', label: <>处理过程 <span className="text-fg-3 tabular-nums">{events.length}</span></> },
             { value: 'messages', label: <>相关消息 <span className="text-fg-3 tabular-nums">{msgs.length}</span></> },
             { value: 'calls', label: <>模型调用 <span className="text-fg-3 tabular-nums">{callCount}</span></> },
+            { value: 'queries', label: '日志查询' },
           ]} />
           {tab === 'timeline' ? (
             <ol>{events.map((e, n) => <TimelineItem key={e.id} e={e} last={n === events.length - 1} />)}</ol>
-          ) : tab === 'calls' ? <IncidentCalls incidentId={i.id} /> : (
+          ) : tab === 'calls' ? <IncidentCalls incidentId={i.id} /> : tab === 'queries' ? <IncidentQueries incidentId={i.id} /> : (
             <ul className="space-y-2.5">
               {msgs.map((m) => (
                 <li key={m.id} className={clsx('group/msg flex items-center gap-1.5', m.from_us && 'flex-row-reverse')}>
