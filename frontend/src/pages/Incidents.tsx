@@ -18,6 +18,8 @@ import {
 } from '../ui'
 import { Composer } from '../components/Composer'
 import { KnowledgeEditor } from './Knowledge'
+import { LiveProgress } from '../components/LiveProgress'
+import { IncidentCalls, useCallCount } from '../components/ModelCalls'
 
 const statusLabel: Record<Incident['status'], [string, Tone]> = {
   open: ['新建', 'slate'], investigating: ['排查中', 'info'], waiting_supplier: ['等待供应商', 'warn'], resolved: ['已解决', 'ok'],
@@ -165,12 +167,13 @@ function IncidentDrawer({ i, groups, workflows, onClose }: {
 }) {
   const qc = useQueryClient()
   const [note, setNote] = useState('')
-  const [tab, setTab] = useState<'timeline' | 'messages'>('timeline')
+  const [tab, setTab] = useState<'timeline' | 'messages' | 'calls'>('timeline')
   const [draft, setDraft] = useState<Partial<Knowledge> | null>(null)
   const [quote, setQuote] = useState<Message | null>(null)
   const now = useNow(30000)
   const id = i?.id
-  const { data: events = [] } = useQuery({ queryKey: ['events', id], queryFn: () => api<IncidentEvent[]>(`/incidents/${id}/events`), enabled: !!id, refetchInterval: 4000 })
+  const { data: events = [] } = useQuery({ queryKey: ['events', id], queryFn: () => api<IncidentEvent[]>(`/incidents/${id}/events`), enabled: !!id, refetchInterval: 15000 })
+  const callCount = useCallCount(id)
   const { data: msgs = [] } = useQuery({ queryKey: ['incident-msgs', id], queryFn: () => api<Message[]>(`/incidents/${id}/messages`), enabled: !!id })
   const update = useMutation({
     mutationFn: (body: Record<string, unknown>) => patch<Incident>(`/incidents/${id}`, body),
@@ -208,6 +211,8 @@ function IncidentDrawer({ i, groups, workflows, onClose }: {
           </Button>
         </>}>
         <div className="space-y-6">
+          {/* 第零层：进度 —— 现在走到哪一步、正在调用什么 */}
+          <LiveProgress incidentId={i.id} />
           {/* 第一层：结论 —— 一眼知道是谁的问题、有多大把握 */}
           <div className="flex items-center gap-4">
             <ScoreRing score={i.confidence} size={52} />
@@ -236,10 +241,11 @@ function IncidentDrawer({ i, groups, workflows, onClose }: {
           <Segmented value={tab} onChange={setTab} options={[
             { value: 'timeline', label: <>处理过程 <span className="text-fg-3 tabular-nums">{events.length}</span></> },
             { value: 'messages', label: <>相关消息 <span className="text-fg-3 tabular-nums">{msgs.length}</span></> },
+            { value: 'calls', label: <>模型调用 <span className="text-fg-3 tabular-nums">{callCount}</span></> },
           ]} />
           {tab === 'timeline' ? (
             <ol>{events.map((e, n) => <TimelineItem key={e.id} e={e} last={n === events.length - 1} />)}</ol>
-          ) : (
+          ) : tab === 'calls' ? <IncidentCalls incidentId={i.id} /> : (
             <ul className="space-y-2.5">
               {msgs.map((m) => (
                 <li key={m.id} className={clsx('group/msg flex items-center gap-1.5', m.from_us && 'flex-row-reverse')}>

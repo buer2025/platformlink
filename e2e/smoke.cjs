@@ -192,7 +192,17 @@ async function api(path, body, method) {
   await page.getByRole('button', { name: '认领' }).click()
   await page.getByText('已指派给 小张').waitFor()
   check(true, '认领事件')
+  const steps = page.locator('section ol li')
+  await steps.filter({ hasText: '收到消息' }).waitFor()
+  check(await steps.filter({ hasText: '解决' }).count() === 1, '事件抽屉显示实时处理进度')
+  await page.getByRole('button', { name: /^模型调用 \d+/ }).click()
+  await page.getByText(/还没有模型调用|次调用/).waitFor()
+  check(true, '事件抽屉可查看模型调用')
   await page.keyboard.press('Escape')
+  await page.goto(BASE + '/calls')
+  await page.getByRole('heading', { name: '模型调用' }).waitFor()
+  await page.getByText('24 小时调用').waitFor()
+  check(true, '模型调用页可访问')
 
   // 刷新保持登录、深链接
   await page.goto(BASE + '/groups')
@@ -202,7 +212,7 @@ async function api(path, body, method) {
   // 手机端
   const phone = await browser.newPage({ viewport: { width: 375, height: 740 } })
   await phone.addInitScript((t) => localStorage.setItem('platformlink.token', t), TOKEN)
-  for (const p of ['/presend', '/incidents', '/quota', '/workflows', '/knowledge', '/groups', '/staff', '/stats']) {
+  for (const p of ['/presend', '/incidents', '/quota', '/workflows', '/knowledge', '/groups', '/staff', '/stats', '/calls']) {
     await phone.goto(BASE + p)
     await phone.waitForTimeout(600)
     const overflow = await phone.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)

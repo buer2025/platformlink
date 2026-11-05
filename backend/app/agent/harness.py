@@ -293,6 +293,8 @@ async def _call(ctx: Ctx, name: str, args: dict) -> str:
         out = f"工具执行失败：{type(e).__name__}"
     record(ctx.session, ctx.incident.id, "tool",
            f"{name}({json.dumps(args, ensure_ascii=False)})\n{out[:1500]}")
+    # 每一步立即提交：后台的处理过程实时可见，也让出 SQLite 写锁给调用留存
+    await ctx.session.commit()
     return out
 
 

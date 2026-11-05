@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent import llm, logs
 from app.models import Group, GroupKind, Incident, IncidentStatus, Outbound
-from app.services import presend
+from app.services import presend, trace
 from app.services.events import record
 from app.services.style import style_of
 
@@ -52,6 +52,7 @@ async def overview(session: AsyncSession) -> list[dict]:
 
 async def draft_push(session: AsyncSession, supplier: Group, note: str = "") -> Outbound:
     """起草一条催量消息进入预发队列（必须人工确认）。"""
+    trace.bind(group_id=supplier.id)
     v = await _supplier_view(session, supplier)
     u = v["usage_24h"]
     facts = [f"模型: {', '.join(supplier.models) or '未标记'}",

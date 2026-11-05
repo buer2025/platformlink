@@ -211,3 +211,50 @@ export const lookupLabel: Record<Lookup, string> = {
 export const respLabel: Record<string, [string, 'info' | 'violet' | 'warn' | 'slate']> = {
   customer: ['客户侧', 'info'], us: ['我方', 'violet'], supplier: ['供应商', 'warn'], unknown: ['待定', 'slate'],
 }
+
+export type ModelCall = {
+  id: string
+  created_at: string
+  finished_at: string | null
+  incident_id: number | null
+  group_id: number | null
+  message_id: number | null
+  kind: string
+  step: number
+  provider: 'claude' | 'jev' | string
+  model: string
+  status: 'running' | 'ok' | 'error'
+  latency_ms: number
+  input_tokens: number
+  output_tokens: number
+  error: string
+}
+
+export type ModelCallDetail = ModelCall & { request: string; response: string }
+
+export type CallStats = { provider: string; calls: number; input_tokens: number; output_tokens: number; avg_latency_ms: number; errors: number }
+
+export type LiveStage = { key: string; label: string; state: 'done' | 'active' | 'pending' | 'skipped'; at: string | null; detail: string }
+
+export type Live = {
+  status: Incident['status']
+  escalated: boolean
+  stages: LiveStage[]
+  running: { id: string; kind: string; label: string; provider: string; model: string; step: number; started_at: string }[]
+  latest: { kind: string; text: string; at: string } | null
+  event_count: number
+}
+
+export const callKindLabel: Record<string, string> = {
+  classify: '分诊', followup: '跟进判断', agent: '排查 Agent', investigate: '排查', integrate: '整合回复',
+  compose: '撰写消息', stylize: '润色', read_image: '识别截图', summarize_conversation: '压缩对话',
+  summarize_memory: '沉淀记忆', distill: '沉淀知识', learn_style: '学习风格', other: '其他',
+}
+
+/** 只显示时刻：12:38 / 12:38:15（补零，不受地区格式影响）。 */
+export const clock = (s: string | null, seconds = false) => {
+  if (!s) return ''
+  const d = new Date(s)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getHours())}:${p(d.getMinutes())}` + (seconds ? `:${p(d.getSeconds())}` : '')
+}

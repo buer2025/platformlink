@@ -289,3 +289,26 @@ class Lease(Base):
     name: Mapped[str] = mapped_column(String(200), primary_key=True)
     holder: Mapped[str] = mapped_column(String(100), default="")
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ModelCall(Base):
+    """每一次模型调用（Claude / Jev）的完整留存：输入、输出、耗时、用量，用于审计与复盘。"""
+
+    __tablename__ = "model_calls"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    incident_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    group_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    message_id: Mapped[int | None] = mapped_column(Integer, index=True)  # 触发这次调用的客户消息
+    kind: Mapped[str] = mapped_column(String(50))  # classify / followup / agent / compose …
+    step: Mapped[int] = mapped_column(Integer, default=0)  # 排查 Agent 的第几轮
+    provider: Mapped[str] = mapped_column(String(20))  # claude / jev
+    model: Mapped[str] = mapped_column(String(100), default="")
+    status: Mapped[str] = mapped_column(String(20), default="running")  # running / ok / error
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    request: Mapped[str] = mapped_column(Text, default="")
+    response: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str] = mapped_column(Text, default="")

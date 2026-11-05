@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent import llm
 from app.config import settings
 from app.models import GroupMemory, Incident, IncidentEvent, IncidentStatus, Message
-from app.services import presend
+from app.services import presend, trace
 from app.services.events import record
 
 log = logging.getLogger(__name__)
@@ -28,6 +28,7 @@ async def _transcript(session: AsyncSession, inc: Incident) -> str:
 
 async def remember(session: AsyncSession, inc: Incident) -> GroupMemory | None:
     """事件关闭时写一条客户记忆（同一事件只写一次）。"""
+    trace.bind(group_id=inc.group_id, incident_id=inc.id)
     if await session.scalar(select(GroupMemory.id).where(GroupMemory.incident_id == inc.id)):
         return None
     text = await llm.summarize_memory(await _transcript(session, inc))

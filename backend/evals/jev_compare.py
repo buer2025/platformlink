@@ -42,8 +42,8 @@ async def main() -> int:
         j_ok = j_issue == issue and (cat is None or a["category"]["choice"] == cat) and (
             kind is None or a["reply_kind"]["choice"] == kind)
         rows.append(("分诊", msg, c_ok, j_ok, cms, jms,
-                     f"issue={a['is_issue']['noul']:.2f} cat={a['category']['choice']} "
-                     f"kind={a['reply_kind']['choice']}"))
+                     (f"issue={a['is_issue']['noul']:.2f} cat={a['category']['choice']} "
+                      f"kind={a['reply_kind']['choice']}")))
 
     conv = "[14:02] 客户: seedance 一直报 429\n[14:03] 我方: 上游限流，已协调扩容，稍后同步"
     fu = [(m, r, rep, per, "") for m, r, rep, per in cases.FOLLOWUP]

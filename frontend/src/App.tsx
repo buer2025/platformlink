@@ -3,7 +3,7 @@ import clsx from 'clsx'
 import { Command } from 'cmdk'
 import {
   BarChart3, BookOpen, Gauge, Inbox, ShieldCheck, LogOut, Monitor, Moon, Search, Sun, Users, Workflow as WorkflowIcon, Zap, MessagesSquare,
-  Keyboard,
+  Keyboard, Cpu,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
@@ -21,6 +21,7 @@ const StaffPage = lazy(() => import('./pages/Staff'))
 const KnowledgePage = lazy(() => import('./pages/Knowledge'))
 const Incidents = lazy(() => import('./pages/Incidents'))
 const Groups = lazy(() => import('./pages/Groups'))
+const CallsPage = lazy(() => import('./pages/Calls'))
 import { Avatar, Kbd, Skeleton, Switch } from './ui'
 
 function useAuthed() {
@@ -42,6 +43,7 @@ const NAV: { to: string; label: string; icon: ReactNode; key: string }[] = [
   { to: '/groups', label: '群与标记', icon: <MessagesSquare size={16} />, key: 'g' },
   { to: '/staff', label: '我方人员', icon: <Users size={16} />, key: 's' },
   { to: '/stats', label: '数据看板', icon: <BarChart3 size={16} />, key: 'd' },
+  { to: '/calls', label: '模型调用', icon: <Cpu size={16} />, key: 'm' },
 ]
 
 const SHORTCUTS: [string, string[]][] = [
@@ -270,6 +272,7 @@ function Shell() {
                 <Route path="/staff" element={<StaffPage />} />
                 <Route path="/stats" element={<StatsPage />} />
                 <Route path="/quota" element={<QuotaPage />} />
+                <Route path="/calls" element={<CallsPage />} />
                 <Route path="/users" element={me && me.role !== 'admin' ? <Navigate to="/presend" replace /> : <UsersPage />} />
                 <Route path="*" element={<Navigate to="/presend" replace />} />
               </Routes>

@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 
 from app.config import settings
+from app.services import trace
 
 log = logging.getLogger(__name__)
 
@@ -44,17 +45,26 @@ async def decide(state: Any, questions: dict[str, dict], timeout: float = 15) ->
     if _client is None:
         _client = httpx.AsyncClient(timeout=timeout)
     t0 = time.monotonic()
+    body = {"model": settings.jev_model, "state": state, "questions": questions}
+    call = trace.Call("jev", settings.jev_model, body)
     try:
         r = await _client.post(f"{base}/v1/decisions", headers={"Authorization": f"Bearer {key}"},
-                               json={"model": settings.jev_model, "state": state, "questions": questions})
-        r.raise_for_status()
-        answers = r.json()["answers"]
+                               json=body)
+        if r.status_code >= 400:
+            raise RuntimeError(f"HTTP {r.status_code}: {r.text[:300]}")
+        data = r.json()
+        answers = data["answers"]
     except Exception as e:  # noqa: BLE001
+        call.done(error=f"{type(e).__name__}: {e}")
         log.warning("jev 决策失败，回退 Claude：%s", e)
         return None
+    usage = data.get("usage") or {}
     if set(answers) != set(questions):
+        call.done(answers, usage.get("input_tokens", 0), usage.get("output_tokens", 0),
+                  error="返回的问题不完整")
         log.warning("jev 返回的问题不完整：%s", list(answers))
         return None
+    call.done(answers, usage.get("input_tokens", 0), usage.get("output_tokens", 0))
     log.debug("jev %.0fms %s", (time.monotonic() - t0) * 1000, answers)
     return answers
 

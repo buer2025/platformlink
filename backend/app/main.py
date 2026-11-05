@@ -9,10 +9,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.api.calls import router as calls_router
 from app.api.routes import admin, public
 from app.config import settings
 from app.db import SessionLocal, run_migrations
-from app.services import lease
+from app.services import lease, trace
 from app.services.memory import close_idle
 from app.services.presend import flush_due, recover_stuck, remind_suppliers
 from app.services.quota import auto_push
@@ -40,7 +41,7 @@ async def scheduler() -> None:
             if not leader:
                 await asyncio.sleep(settings.scheduler_interval_seconds)
                 continue
-            async with SessionLocal() as s:
+            async with SessionLocal() as s, trace.scope():  # 定时任务里的模型调用各自归属
                 await recover_stuck(s)
                 await remind_suppliers(s)
                 await flush_due(s)
@@ -69,6 +70,7 @@ async def lifespan(_: FastAPI):
 
         tasks.append(asyncio.create_task(poll_forever()))
     yield
+    await trace.flush()
     for task in tasks:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -78,6 +80,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="PlatformLink", lifespan=lifespan)
 app.include_router(public)
 app.include_router(admin)
+app.include_router(calls_router)
 
 
 @app.get("/healthz")

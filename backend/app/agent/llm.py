@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from app.agent import jev
 from app.config import settings
+from app.services.trace import TracedClient
 
 log = logging.getLogger(__name__)
 
@@ -47,16 +48,17 @@ class Rewrite(BaseModel):
     text: str
 
 
-_clients: dict[str, anthropic.AsyncAnthropic] = {}
+_clients: dict[str, TracedClient] = {}
 
 
-def _client() -> anthropic.AsyncAnthropic | None:
+def _client() -> TracedClient | None:
+    """所有 Claude 调用都经过这里；返回的客户端会把每次调用留存到 model_calls。"""
     key = settings.anthropic_api_key
     if not key:
         return None
     if key not in _clients:
-        _clients[key] = anthropic.AsyncAnthropic(
-            api_key=key, base_url=settings.anthropic_base_url or None)
+        _clients[key] = TracedClient(anthropic.AsyncAnthropic(
+            api_key=key, base_url=settings.anthropic_base_url or None))
     return _clients[key]
 
 

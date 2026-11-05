@@ -161,6 +161,9 @@ async def remind_suppliers(session: AsyncSession) -> int:
             continue
         supplier = await session.get(Group, inc.supplier_group_id)
         from app.agent import llm  # 避免循环导入
+        from app.services import trace
+
+        trace.bind(group_id=supplier.id, incident_id=inc.id)
 
         text = await llm.compose(
             "客气地催一下供应商处理上面转交的问题，客户那边还在等",

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent import llm
 from app.models import Group, GroupKind, Incident, Staff, User
-from app.services import presend
+from app.services import presend, trace
 from app.services.events import record
 from app.services.style import style_of
 
@@ -27,6 +27,7 @@ async def _accounts(session: AsyncSession, platform, names: list[str]) -> list[s
 
 async def escalate(session: AsyncSession, group: Group, incident: Incident, reason: str) -> bool:
     """同一事件只升级一次（重新打开后可再次升级）。返回是否发起了升级。"""
+    trace.bind(group_id=group.id, incident_id=incident.id)
     if incident.escalated_at:
         return False
     incident.escalated_at = presend.utcnow()

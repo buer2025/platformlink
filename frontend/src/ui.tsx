@@ -63,7 +63,9 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<H
   })
 
 export function Select({ className, ...p }: SelectHTMLAttributes<HTMLSelectElement>) {
-  return <select {...p} className={clsx(field, 'h-8 pr-7', className)} />
+  // 传了宽度（w-32 等）就不再强制 w-full，否则两个宽度类谁生效取决于 CSS 顺序
+  const sized = /(^|\s)w-/.test(className ?? '')
+  return <select {...p} className={clsx(sized ? field.replace('w-full ', 'shrink-0 ') : field, 'h-8 pr-7', className)} />
 }
 
 export function Field({ label, hint, children, wide }: { label: string; hint?: string; children: ReactNode; wide?: boolean }) {

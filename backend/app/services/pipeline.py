@@ -26,7 +26,7 @@ from app.models import (
     Staff,
     Workflow,
 )
-from app.services import knowledge, lease, memory, presend
+from app.services import knowledge, lease, memory, presend, trace
 from app.services.assign import auto_assign
 from app.services.escalation import escalate
 from app.services.events import record
@@ -220,6 +220,7 @@ def _progress(incident: Incident) -> str:
 async def _investigate(session: AsyncSession, group: Group, incident: Incident,
                        c: llm.Classification, text: str, reply_to: str,
                        wf: Workflow | None) -> None:
+    trace.bind(group_id=group.id, incident_id=incident.id)
     """查数据 → Agent 排查 → 客户回复 / 供应商转交进入预发队列。"""
     force_confirm = bool(wf and wf.automation == "confirm")
     conv, _, seen = await _conversation(session, incident)
@@ -241,6 +242,7 @@ async def _investigate(session: AsyncSession, group: Group, incident: Incident,
                       memories=await memory.recall(session, group.id),
                       found=ev.found,
                       channel_ids=list(ev.channel_ids), knowledge_ids=[k.id for k in kb])
+    await session.commit()  # 预查询结果先落库，进度实时可见；模型思考期间不占写锁
     f = await harness.run(ctx, instructions, preloaded)
     if f is None:  # 无 Key / 调用失败：单次判断或规则兜底
         f = await llm.investigate(c, ev.text, instructions, ev.found, knowledge.as_prompt(kb))
@@ -284,6 +286,7 @@ async def _investigate(session: AsyncSession, group: Group, incident: Incident,
 async def _reinvestigate(session: AsyncSession, group: Group, incident: Incident,
                          c: llm.Classification, m: InboundMessage) -> None:
     """客户补充或更正了 request_id：撤回还没发出的回复，按新信息重新排查。"""
+    trace.bind(incident_id=incident.id)
     old = incident.request_id
     incident.request_id = c.request_id
     if not incident.model and c.model:
@@ -303,6 +306,7 @@ async def _reinvestigate(session: AsyncSession, group: Group, incident: Incident
 async def _respond_followup(session: AsyncSession, group: Group, incident: Incident,
                            m: InboundMessage, quoted: str = "") -> None:
     """同一事件里客户又发了消息：未发出的回复改写成整合版；已发出的则针对新消息跟进。"""
+    trace.bind(incident_id=incident.id)
     replies = (await session.scalars(select(Outbound).where(
         Outbound.incident_id == incident.id, Outbound.purpose == "customer_reply",
         Outbound.status != OutboundStatus.cancelled).order_by(Outbound.id.desc()))).all()
@@ -370,6 +374,7 @@ async def _human_takeover(session: AsyncSession, group: Group, msg: Message, who
 async def _handle_quote(session: AsyncSession, group: Group, msg: Message, m: InboundMessage,
                         quoted: Message) -> Incident | None:
     """引用了某个事件里的消息：归到那个事件，判断是不是在继续追问。"""
+    trace.bind(incident_id=quoted.incident_id)
     incident = await session.get(Incident, quoted.incident_id)
     if incident is None:
         await session.commit()
@@ -400,7 +405,7 @@ _group_locks: dict[tuple[str, str], asyncio.Lock] = defaultdict(asyncio.Lock)
 
 async def handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident | None:
     key = (m.platform, m.chat_id)
-    async with _group_locks[key], lease.hold(f"group:{m.platform}:{m.chat_id}"):
+    async with _group_locks[key], lease.hold(f"group:{m.platform}:{m.chat_id}"), trace.scope():
         try:
             return await _handle_inbound(session, m)
         except Exception as e:
@@ -482,6 +487,7 @@ async def _handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident 
                   reply_to_external_id=m.reply_to_message_id, from_us=staff)
     session.add(msg)
     await session.flush()
+    trace.bind(group_id=group.id, message_id=msg.id)
 
     if staff and not m.is_bot and group.kind == GroupKind.customer:
         await _human_takeover(session, group, msg, m.sender)
@@ -540,6 +546,7 @@ async def _handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident 
                         status=IncidentStatus.investigating)
     session.add(incident)
     await session.flush()
+    trace.bind(incident_id=incident.id)
     msg.incident_id = incident.id
     record(session, incident.id, "created", f"{m.sender}：{m.text}", actor=m.sender)
     await auto_assign(session, group, incident)
