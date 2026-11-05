@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models import AutomationMode, GroupKind, IncidentStatus, OutboundStatus, Platform
+from app.models import AutomationMode, GroupKind, IncidentStatus, OutboundStatus, Platform, UserRole
 
 
 class GroupOut(BaseModel):
@@ -25,6 +25,7 @@ class GroupOut(BaseModel):
     tags: list[str]
     api_users: list[str]
     channel_ids: list[int]
+    bot_webhook: str
 
 
 class GroupUpdate(BaseModel):
@@ -42,6 +43,7 @@ class GroupUpdate(BaseModel):
     tags: list[str] | None = None
     api_users: list[str] | None = None
     channel_ids: list[int] | None = None
+    bot_webhook: str | None = None
 
 
 class PartyIn(BaseModel):
@@ -91,6 +93,7 @@ class IncidentOut(BaseModel):
     escalation_reason: str
     human_until: datetime | None
     human_by: str
+    assignee_id: int | None
     created_at: datetime
 
 
@@ -139,6 +142,7 @@ class StaffOut(StaffIn):
 class IncidentUpdate(BaseModel):
     status: IncidentStatus | None = None
     responsible: str | None = None
+    assignee_id: int | None = None
     note: str = ""  # 人工备注，写入时间线
     actor: str = ""
 
@@ -216,3 +220,40 @@ class ManualSendIn(BaseModel):
 class DraftIn(BaseModel):
     incident_id: int | None = None
     intent: str = ""  # 想说什么；留空则由 AI 根据进展自己判断
+
+
+class LoginIn(BaseModel):
+    username: str
+    password: str
+
+
+class MeUpdate(BaseModel):
+    on_duty: bool | None = None
+    password: str | None = None
+    old_password: str | None = None
+
+
+class UserIn(BaseModel):
+    username: str = Field(min_length=2, max_length=64)
+    display_name: str = Field(min_length=1, max_length=100)
+    password: str
+    role: UserRole = UserRole.agent
+    on_duty: bool = False
+
+
+class UserUpdate(BaseModel):
+    display_name: str | None = None
+    role: UserRole | None = None
+    active: bool | None = None
+    on_duty: bool | None = None
+    password: str | None = None
+
+
+class UserOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    username: str
+    display_name: str
+    role: UserRole
+    active: bool
+    on_duty: bool

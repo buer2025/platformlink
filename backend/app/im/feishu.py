@@ -24,10 +24,27 @@ class FeishuAdapter:
             return None
         event = payload["event"]
         msg = event["message"]
-        if msg.get("message_type") != "text":
+        kind = msg.get("message_type")
+        content = json.loads(msg.get("content") or "{}")
+        images: list[str] = []
+        if kind == "text":
+            text = re.sub(r"@_user_\d+\s*", "", content.get("text", "")).strip()
+        elif kind == "image":
+            # 图片要按「消息 ID + image_key」下载
+            text, images = "[图片]", [f"{msg['message_id']}:{content.get('image_key', '')}"]
+        elif kind == "post":  # 富文本：拼出文字，收集其中的图片
+            text_parts = []
+            body = content.get("content") or next(
+                (v.get("content") for v in content.values() if isinstance(v, dict)), []) or []
+            for line in body:
+                for el in line:
+                    if el.get("tag") == "text":
+                        text_parts.append(el.get("text", ""))
+                    elif el.get("tag") == "img":
+                        images.append(f"{msg['message_id']}:{el.get('image_key', '')}")
+            text = (content.get("title", "") + " " + "".join(text_parts)).strip() or "[图片]"
+        else:
             return None
-        text = json.loads(msg["content"]).get("text", "")
-        text = re.sub(r"@_user_\d+\s*", "", text).strip()
         return InboundMessage(
             platform=self.platform,
             chat_id=msg["chat_id"],
@@ -38,7 +55,19 @@ class FeishuAdapter:
             reply_to_message_id=msg.get("parent_id", ""),
             mentions=[m.get("id", {}).get("open_id", "") for m in msg.get("mentions", [])],
             is_bot=event.get("sender", {}).get("sender_type") == "app",
+            image_ids=images,
         )
+
+    async def fetch_image(self, image_id: str) -> tuple[bytes, str] | None:
+        message_id, key = image_id.split(":", 1)
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.get(
+                f"{API}/im/v1/messages/{message_id}/resources/{key}", params={"type": "image"},
+                headers={"Authorization": f"Bearer {await self._tenant_token(client)}"})
+            r.raise_for_status()
+            if len(r.content) > 5 * 1024 * 1024:
+                return None
+            return r.content, r.headers.get("content-type", "image/jpeg").split(";")[0]
 
     async def _tenant_token(self, client: httpx.AsyncClient) -> str:
         if self._token and time.time() < self._token_exp:
@@ -75,3 +104,26 @@ class FeishuAdapter:
                 )
             r.raise_for_status()
             return r.json()["data"]["message_id"]
+
+
+def decrypt_event(encrypted: str, encrypt_key: str) -> dict:
+    """飞书事件加密（开启 Encrypt Key 后）：AES-256-CBC，key = sha256(Encrypt Key)，前 16 字节为 IV。"""
+    import base64
+    import hashlib
+
+    from cryptography.hazmat.primitives import padding
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    raw = base64.b64decode(encrypted)
+    key = hashlib.sha256(encrypt_key.encode()).digest()
+    dec = Cipher(algorithms.AES(key), modes.CBC(raw[:16])).decryptor()
+    padded = dec.update(raw[16:]) + dec.finalize()
+    unpad = padding.PKCS7(128).unpadder()
+    return json.loads(unpad.update(padded) + unpad.finalize())
+
+
+def verify_signature(timestamp: str, nonce: str, encrypt_key: str, body: bytes, signature: str) -> bool:
+    """飞书请求签名：sha256(timestamp + nonce + encrypt_key + body)。"""
+    import hashlib
+    import hmac
+    expect = hashlib.sha256((timestamp + nonce + encrypt_key).encode() + body).hexdigest()
+    return hmac.compare_digest(expect, signature)

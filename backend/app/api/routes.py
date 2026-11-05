@@ -1,18 +1,29 @@
+import json
 import uuid
 from datetime import timedelta
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
-from sqlalchemy import select
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent import llm, logs
-from app.auth import require_admin, verify_webhook
+from app.auth import (
+    Actor,
+    admin_only,
+    check_password,
+    create_session,
+    current_actor,
+    hash_password,
+    require_admin,
+    verify_webhook,
+)
 from app.config import settings
 from app.db import SessionLocal, get_session
 from app.im.base import InboundMessage
 from app.im.registry import get_adapter
 from app.models import (
+    ApiSession,
     Group,
     GroupMemory,
     Incident,
@@ -25,6 +36,7 @@ from app.models import (
     Party,
     Platform,
     Staff,
+    User,
     Workflow,
 )
 from app.schemas import (
@@ -36,9 +48,11 @@ from app.schemas import (
     IncidentUpdate,
     KnowledgeIn,
     KnowledgeOut,
+    LoginIn,
     LookupTest,
     ManualSendIn,
     MessageOut,
+    MeUpdate,
     OutboundEdit,
     OutboundOut,
     PartyIn,
@@ -47,6 +61,9 @@ from app.schemas import (
     StaffIn,
     StaffOut,
     StylePreviewIn,
+    UserIn,
+    UserOut,
+    UserUpdate,
     WorkflowIn,
     WorkflowOut,
 )
@@ -58,6 +75,8 @@ from app.services.style import style_of
 admin = APIRouter(prefix="/api", dependencies=[Depends(require_admin)])
 public = APIRouter(prefix="/api")
 Session = Depends(get_session)
+Me = Depends(current_actor)
+AdminOnly = Depends(admin_only)
 
 
 def _aware(obj, *fields):
@@ -67,8 +86,85 @@ def _aware(obj, *fields):
 
 
 @admin.get("/me")
-async def me():
+async def me(actor: Actor = Me, s: AsyncSession = Session):
+    user = await s.get(User, actor.id) if actor.id else None
+    return {"id": actor.id, "name": actor.name, "role": actor.role,
+            "on_duty": bool(user and user.on_duty), "builtin": actor.id is None}
+
+
+@admin.patch("/me")
+async def update_me(body: MeUpdate, actor: Actor = Me, s: AsyncSession = Session):
+    if actor.id is None:
+        raise HTTPException(400, "内置管理员不能修改，请创建个人账号")
+    user = await s.get(User, actor.id)
+    if body.on_duty is not None:
+        user.on_duty = body.on_duty
+    if body.password:
+        if not check_password(body.old_password or "", user.password_hash):
+            raise HTTPException(400, "原密码不对")
+        user.password_hash = hash_password(body.password)
+    await s.commit()
+    return {"ok": True, "on_duty": user.on_duty}
+
+
+# ---------- 账号 ----------
+
+@public.post("/auth/login")
+async def login(body: LoginIn, s: AsyncSession = Session):
+    user = await s.scalar(select(User).where(User.username == body.username.strip()))
+    if not user or not user.active or not check_password(body.password, user.password_hash):
+        raise HTTPException(401, "用户名或密码错误")
+    return {"token": await create_session(s, user), "name": user.display_name, "role": user.role}
+
+
+@admin.post("/auth/logout")
+async def logout(authorization: str = Header(default=""), s: AsyncSession = Session):
+    from app.auth import _token_hash
+    token = authorization.removeprefix("Bearer ").strip()
+    await s.execute(delete(ApiSession).where(ApiSession.token_hash == _token_hash(token)))
+    await s.commit()
     return {"ok": True}
+
+
+@admin.get("/users", response_model=list[UserOut])
+async def list_users(s: AsyncSession = Session):
+    return (await s.scalars(select(User).order_by(User.id))).all()
+
+
+@admin.post("/users", response_model=UserOut, dependencies=[AdminOnly])
+async def create_user(body: UserIn, s: AsyncSession = Session):
+    if not body.password or len(body.password) < 8:
+        raise HTTPException(422, "密码至少 8 位")
+    u = User(username=body.username.strip(), display_name=body.display_name.strip(), role=body.role,
+             password_hash=hash_password(body.password), active=True, on_duty=body.on_duty)
+    s.add(u)
+    try:
+        await s.commit()
+    except IntegrityError:
+        await s.rollback()
+        raise HTTPException(409, "用户名已存在") from None
+    await s.refresh(u)
+    return u
+
+
+@admin.patch("/users/{user_id}", response_model=UserOut, dependencies=[AdminOnly])
+async def update_user(user_id: int, body: UserUpdate, s: AsyncSession = Session):
+    u = await s.get(User, user_id)
+    if not u:
+        raise HTTPException(404, "账号不存在")
+    data = body.model_dump(exclude_unset=True)
+    if pw := data.pop("password", None):
+        if len(pw) < 8:
+            raise HTTPException(422, "密码至少 8 位")
+        u.password_hash = hash_password(pw)
+        await s.execute(delete(ApiSession).where(ApiSession.user_id == u.id))  # 改密码后其他登录失效
+    if data.get("active") is False:
+        await s.execute(delete(ApiSession).where(ApiSession.user_id == u.id))
+    for k, v in data.items():
+        setattr(u, k, v)
+    await s.commit()
+    await s.refresh(u)
+    return u
 
 
 # ---------- 群与标记 ----------
@@ -145,7 +241,8 @@ async def delete_memory(memory_id: int, s: AsyncSession = Session):
 
 
 @admin.post("/groups/{group_id}/send", response_model=OutboundOut)
-async def manual_send(group_id: int, body: ManualSendIn, s: AsyncSession = Session):
+async def manual_send(group_id: int, body: ManualSendIn, actor_: Actor = Me,
+                      s: AsyncSession = Session):
     """管理员从后台通过机器人发消息（原样发送，不经 AI 改写）。"""
     g = await s.get(Group, group_id)
     if not g:
@@ -156,7 +253,7 @@ async def manual_send(group_id: int, body: ManualSendIn, s: AsyncSession = Sessi
         if not quoted or quoted.group_id != g.id:
             raise HTTPException(422, "引用的消息不在这个群里")
         reply_to = quoted.external_id
-    actor = body.actor.strip() or "管理员"
+    actor = actor_.name
     o = await presend.enqueue(s, g, body.text.strip(), 100, "manual", body.incident_id,
                               reply_to=reply_to, mentions=body.mentions, force_confirm=True)
     o.edited_by = actor
@@ -227,7 +324,7 @@ async def list_staff(s: AsyncSession = Session):
     return (await s.scalars(select(Staff).order_by(Staff.id))).all()
 
 
-@admin.post("/staff", response_model=StaffOut)
+@admin.post("/staff", response_model=StaffOut, dependencies=[AdminOnly])
 async def create_staff(body: StaffIn, s: AsyncSession = Session):
     st = Staff(**body.model_dump())
     s.add(st)
@@ -238,7 +335,7 @@ async def create_staff(body: StaffIn, s: AsyncSession = Session):
     return st
 
 
-@admin.delete("/staff/{staff_id}")
+@admin.delete("/staff/{staff_id}", dependencies=[AdminOnly])
 async def delete_staff(staff_id: int, s: AsyncSession = Session):
     st = await s.get(Staff, staff_id)
     if st:
@@ -254,8 +351,8 @@ INCIDENT_TIMES = ("created_at", "ticket_sent_at", "supplier_replied_at", "resolv
 
 
 @admin.get("/incidents", response_model=list[IncidentOut])
-async def list_incidents(status: str = "", group_id: int | None = None,
-                         s: AsyncSession = Session):
+async def list_incidents(status: str = "", group_id: int | None = None, mine: bool = False,
+                         actor: Actor = Me, s: AsyncSession = Session):
     q = select(Incident).order_by(Incident.id.desc()).limit(200)
     if status == "active":
         q = q.where(Incident.status != IncidentStatus.resolved)
@@ -263,20 +360,31 @@ async def list_incidents(status: str = "", group_id: int | None = None,
         q = q.where(Incident.status == status)
     if group_id:
         q = q.where(Incident.group_id == group_id)
+    if mine:
+        q = q.where(Incident.assignee_id == actor.id)
     rows = (await s.scalars(q)).all()
     return [_aware(i, *INCIDENT_TIMES) for i in rows]
 
 
 @admin.patch("/incidents/{incident_id}", response_model=IncidentOut)
-async def update_incident(incident_id: int, body: IncidentUpdate, s: AsyncSession = Session):
+async def update_incident(incident_id: int, body: IncidentUpdate, actor: Actor = Me,
+                          s: AsyncSession = Session):
     i = await s.get(Incident, incident_id)
     if not i:
         raise HTTPException(404, "事件不存在")
-    actor = body.actor or "管理员"
+    who = actor.name
     changes = body.model_dump(exclude_unset=True, exclude={"note", "actor"})
+    if "assignee_id" in changes:
+        new = changes.pop("assignee_id")
+        if new != i.assignee_id:
+            user = await s.get(User, new) if new else None
+            if new and (not user or not user.active):
+                raise HTTPException(422, "指派的账号不存在或已停用")
+            i.assignee_id = new
+            record(s, i.id, "assigned", f"指派给 {user.display_name}" if user else "取消指派", actor=who)
     for k, v in changes.items():
         if getattr(i, k) != v:
-            record(s, i.id, "manual", f"{k}: {getattr(i, k)} → {v}", actor=actor)
+            record(s, i.id, "manual", f"{k}: {getattr(i, k)} → {v}", actor=who)
             setattr(i, k, v)
     if changes.get("status") == IncidentStatus.resolved and not i.resolved_at:
         i.resolved_at = presend.utcnow()
@@ -284,7 +392,7 @@ async def update_incident(incident_id: int, body: IncidentUpdate, s: AsyncSessio
     elif "status" in changes and changes["status"] != IncidentStatus.resolved:
         i.resolved_at = None
     if body.note.strip():
-        record(s, i.id, "note", body.note.strip(), actor=actor)
+        record(s, i.id, "note", body.note.strip(), actor=who)
     await s.commit()
     await s.refresh(i)
     return _aware(i, *INCIDENT_TIMES)
@@ -339,9 +447,10 @@ async def _get(s: AsyncSession, outbound_id: int, allowed=presend.OPEN) -> Outbo
 
 
 @admin.post("/outbound/{outbound_id}/send", response_model=OutboundOut)
-async def send_now(outbound_id: int, s: AsyncSession = Session):
+async def send_now(outbound_id: int, actor: Actor = Me, s: AsyncSession = Session):
     o = await _get(s, outbound_id, presend.RETRYABLE)
     o.sent_by = "approved"
+    record(s, o.incident_id, "approved", f"{actor.name} 确认发送", actor=actor.name)
     if not await presend.deliver(s, o, presend.RETRYABLE):
         await s.refresh(o)
         if o.status != OutboundStatus.failed:
@@ -351,23 +460,23 @@ async def send_now(outbound_id: int, s: AsyncSession = Session):
 
 
 @admin.post("/outbound/{outbound_id}/edit", response_model=OutboundOut)
-async def edit(outbound_id: int, body: OutboundEdit, s: AsyncSession = Session):
+async def edit(outbound_id: int, body: OutboundEdit, actor: Actor = Me, s: AsyncSession = Session):
     o = await _get(s, outbound_id, presend.RETRYABLE)
     if not body.text.strip():
         raise HTTPException(422, "内容不能为空")
     # 人工修改后不再自动发送，等待确认
-    o.text, o.edited_by = body.text.strip(), body.editor
+    o.text, o.edited_by = body.text.strip(), actor.name
     o.status, o.send_at = OutboundStatus.needs_approval, None
-    record(s, o.incident_id, "edited", f"预发消息被修改：{o.text}", actor=body.editor or "管理员")
+    record(s, o.incident_id, "edited", f"预发消息被修改：{o.text}", actor=actor.name)
     await s.commit()
     return _out(o)
 
 
 @admin.post("/outbound/{outbound_id}/cancel", response_model=OutboundOut)
-async def cancel(outbound_id: int, s: AsyncSession = Session):
+async def cancel(outbound_id: int, actor: Actor = Me, s: AsyncSession = Session):
     o = await _get(s, outbound_id, presend.RETRYABLE)
     o.status = OutboundStatus.cancelled
-    record(s, o.incident_id, "cancelled", f"预发消息已取消：{o.text}", actor="管理员")
+    record(s, o.incident_id, "cancelled", f"预发消息已取消：{o.text}", actor=actor.name)
     await s.commit()
     return _out(o)
 
@@ -392,12 +501,12 @@ async def _save_workflow(s: AsyncSession, w: Workflow, body: WorkflowIn) -> Work
     return w
 
 
-@admin.post("/workflows", response_model=WorkflowOut)
+@admin.post("/workflows", response_model=WorkflowOut, dependencies=[AdminOnly])
 async def create_workflow(body: WorkflowIn, s: AsyncSession = Session):
     return await _save_workflow(s, Workflow(), body)
 
 
-@admin.put("/workflows/{workflow_id}", response_model=WorkflowOut)
+@admin.put("/workflows/{workflow_id}", response_model=WorkflowOut, dependencies=[AdminOnly])
 async def update_workflow(workflow_id: int, body: WorkflowIn, s: AsyncSession = Session):
     w = await s.get(Workflow, workflow_id)
     if not w:
@@ -405,7 +514,7 @@ async def update_workflow(workflow_id: int, body: WorkflowIn, s: AsyncSession = 
     return await _save_workflow(s, w, body)
 
 
-@admin.delete("/workflows/{workflow_id}")
+@admin.delete("/workflows/{workflow_id}", dependencies=[AdminOnly])
 async def delete_workflow(workflow_id: int, s: AsyncSession = Session):
     w = await s.get(Workflow, workflow_id)
     if not w:
@@ -436,12 +545,12 @@ async def list_knowledge(q: str = "", model: str = "", s: AsyncSession = Session
 
 
 @admin.post("/knowledge", response_model=KnowledgeOut)
-async def create_knowledge(body: KnowledgeIn, s: AsyncSession = Session):
+async def create_knowledge(body: KnowledgeIn, actor: Actor = Me, s: AsyncSession = Session):
     k = Knowledge(**body.model_dump())
     s.add(k)
     await s.flush()
     record(s, body.source_incident_id, "knowledge_saved", f"沉淀为知识 #{k.id} {k.title}",
-           actor="管理员")
+           actor=actor.name)
     await s.commit()
     await s.refresh(k)
     return _aware(k, "created_at", "updated_at")
@@ -506,10 +615,25 @@ async def _process(m: InboundMessage) -> None:
 
 @public.post("/webhooks/{platform}")
 async def webhook(platform: Platform, request: Request, bg: BackgroundTasks):
+    body = await request.body()
     try:
-        payload = await request.json()
+        payload = json.loads(body)
     except ValueError:
         raise HTTPException(400, "invalid json") from None
+    if platform == Platform.feishu and "encrypt" in payload:
+        from app.im.feishu import decrypt_event, verify_signature
+        if not settings.feishu_encrypt_key:
+            raise HTTPException(400, "飞书事件已加密，但未配置 FEISHU_ENCRYPT_KEY")
+        h = request.headers
+        sig = h.get("x-lark-signature")
+        if sig and not verify_signature(h.get("x-lark-request-timestamp", ""),
+                                        h.get("x-lark-request-nonce", ""),
+                                        settings.feishu_encrypt_key, body, sig):
+            raise HTTPException(403, "飞书签名校验失败")
+        try:
+            payload = decrypt_event(payload["encrypt"], settings.feishu_encrypt_key)
+        except Exception:  # noqa: BLE001
+            raise HTTPException(400, "飞书事件解密失败，请检查 Encrypt Key") from None
     if not verify_webhook(platform, request, payload):
         raise HTTPException(403, "webhook 校验失败")
     if payload.get("type") == "url_verification":  # 飞书回调地址校验

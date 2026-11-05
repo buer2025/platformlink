@@ -27,6 +27,7 @@ from app.models import (
     Workflow,
 )
 from app.services import knowledge, memory, presend
+from app.services.assign import auto_assign
 from app.services.escalation import escalate
 from app.services.events import record
 from app.services.style import style_of
@@ -474,6 +475,7 @@ async def _handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident 
     await session.flush()
     msg.incident_id = incident.id
     record(session, incident.id, "created", f"{m.sender}：{m.text}", actor=m.sender)
+    await auto_assign(session, group, incident)
     record(session, incident.id, "classified",
            f"类别 {c.category}，模型 {c.model or '未知'}，request_id {c.request_id or '无'}；"
            f"链路：{wf.name if wf else '默认'}")

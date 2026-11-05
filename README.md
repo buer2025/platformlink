@@ -42,8 +42,8 @@ curl -XPOST localhost:8000/api/simulate -H "Authorization: Bearer $ADMIN_TOKEN" 
 | 平台 | 回调地址 | 配置 |
 |---|---|---|
 | Telegram | `POST /api/webhooks/telegram` | BotFather 关闭 privacy mode；`setWebhook?url=...&secret_token=<TELEGRAM_WEBHOOK_SECRET>` |
-| 飞书 | `POST /api/webhooks/feishu` | 事件订阅 `im.message.receive_v1`，填 Verification Token，**不要开启 Encrypt Key**；权限：接收群消息、发送消息 |
-| 企业微信 | `POST /api/webhooks/wecom` | 会话存档拉取进程转发，请求头带 `X-Forward-Secret`；**发送尚未实现** |
+| 飞书 | `POST /api/webhooks/feishu` | 事件订阅 `im.message.receive_v1`，填 Verification Token；开启 Encrypt Key 时同时配置 `FEISHU_ENCRYPT_KEY`；权限：接收群消息、发送消息 |
+| 企业微信 | `POST /api/webhooks/wecom` | 接收：会话存档拉取进程转发，请求头带 `X-Forward-Secret`；发送：在群设置里填「群机器人 Webhook」（仅内部群，外部客户群请设为需人工确认） |
 
 所有回调都会校验密钥，未配置对应密钥时该平台回调一律拒绝。
 
@@ -67,6 +67,13 @@ LOG_DATABASE_URL=mysql+aiomysql://readonly:密码@host:3306/new-api   # 只读�
 ## 键盘操作
 
 `⌘K` 命令面板 · `G` 然后 `P/I/W/K/G/S` 切换页面 · `J/K` 上下 · `↵` 打开 · `⌘↵` 发送/保存 · `E` 修改 · `R` 标记解决 · `C` 新建 · `⇧T` 主题 · `?` 全部快捷键
+
+## 账号与值班
+
+首次部署用 `ADMIN_TOKEN` 登录（登录页「使用管理口令登录」），在「账号与值班」给每位同事建账号。
+- 角色：管理员（管理账号、链路、我方人员）/ 技术支持（处理事件、发消息、打标记）
+- 值班中的同事参与自动分配：群负责人优先，否则分给手上未结事件最少的人
+- 显示名与「我方人员」姓名一致时，升级会 @ 到他的 IM 账号
 
 ## 上线检查清单
 

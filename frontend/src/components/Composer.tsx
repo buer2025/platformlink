@@ -30,7 +30,7 @@ export function Composer({ groupId, groupName, incidentId, quote, onClearQuote }
   })
   const send = useMutation({
     mutationFn: () => post(`/groups/${groupId}/send`, {
-      text, incident_id: incidentId, reply_to_message_id: quote?.id, actor: '管理员',
+      text, incident_id: incidentId, reply_to_message_id: quote?.id,
     }),
     onSuccess: () => {
       setText(''); onClearQuote?.()

@@ -2,24 +2,25 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import { Command } from 'cmdk'
 import {
-  BarChart3, BookOpen, Inbox, LogOut, Monitor, Moon, Search, Sun, Users, Workflow as WorkflowIcon, Zap, MessagesSquare,
+  BarChart3, BookOpen, Inbox, ShieldCheck, LogOut, Monitor, Moon, Search, Sun, Users, Workflow as WorkflowIcon, Zap, MessagesSquare,
   Keyboard,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { Toaster } from 'sonner'
-import { api, getToken, setToken, type Group, type Incident, type Outbound } from './api'
+import { api, getToken, patch, post, setToken, type Group, type Incident, type Me, type Outbound } from './api'
 import { useHotkeys, useTheme } from './hooks'
 import Login from './pages/Login'
 import Presend from './pages/Presend'
 const Workflows = lazy(() => import('./pages/Workflows'))
 const StatsPage = lazy(() => import('./pages/Stats'))
+const UsersPage = lazy(() => import('./pages/Users'))
 const StaffPage = lazy(() => import('./pages/Staff'))
 const KnowledgePage = lazy(() => import('./pages/Knowledge'))
 const Incidents = lazy(() => import('./pages/Incidents'))
 const Groups = lazy(() => import('./pages/Groups'))
-import { Kbd, Skeleton } from './ui'
+import { Avatar, Kbd, Skeleton, Switch } from './ui'
 
 function useAuthed() {
   const [token, set] = useState(getToken)
@@ -160,6 +161,15 @@ function Shell() {
     select: (rows) => rows.filter((i) => i.status !== 'resolved').length,
   })
   const counts: Record<string, number> = { '/presend': waiting, '/incidents': active }
+  const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api<Me>('/me'), refetchInterval: 60000 })
+  const logout = async () => {
+    try { await post('/auth/logout') } catch { /* 已失效也照常退出 */ }
+    setToken(''); qc.clear()
+  }
+  const toggleDuty = async (v: boolean) => {
+    await patch('/me', { on_duty: v })
+    qc.invalidateQueries({ queryKey: ['me'] })
+  }
 
   useEffect(() => {
     document.title = waiting ? `(${waiting}) PlatformLink` : 'PlatformLink'
@@ -207,11 +217,27 @@ function Shell() {
             </NavLink>
           ))}
         </nav>
-        <div className="mt-auto flex items-center gap-1 px-1">
+        {me?.role === 'admin' && (
+          <NavLink to="/users" className={({ isActive }) => clsx('mt-0.5 flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] transition-colors',
+            isActive ? 'bg-panel-2 font-medium text-fg' : 'text-fg-2 hover:bg-panel-2 hover:text-fg')}>
+            <ShieldCheck size={16} className="text-fg-3" />账号与值班
+          </NavLink>
+        )}
+        {me && (
+          <div className="mt-auto mb-2 flex items-center gap-2.5 rounded-xl px-2 py-2">
+            <Avatar name={me.name} size={28} />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[13px] font-medium">{me.name}</div>
+              <div className="text-[11px] text-fg-3">{me.builtin ? '管理口令登录' : me.on_duty ? '值班中 · 会分到新事件' : '未值班'}</div>
+            </div>
+            {!me.builtin && <Switch checked={me.on_duty} onChange={toggleDuty} label="值班" />}
+          </div>
+        )}
+        <div className="flex items-center gap-1 px-1">
           <button className="grid size-8 place-items-center rounded-lg text-fg-3 hover:bg-panel-2 hover:text-fg" title="切换主题 (⇧T)" onClick={cycle}><ThemeIcon size={15} /></button>
           <button className="grid size-8 place-items-center rounded-lg text-fg-3 hover:bg-panel-2 hover:text-fg" title="快捷键 (?)" onClick={() => setHelp(true)}><Keyboard size={15} /></button>
           <button className="ml-auto flex h-8 items-center gap-1.5 rounded-lg px-2 text-[13px] text-fg-3 hover:bg-panel-2 hover:text-fg"
-            onClick={() => { setToken(''); qc.clear() }}><LogOut size={14} />退出</button>
+            onClick={logout}><LogOut size={14} />退出</button>
         </div>
       </aside>
 
@@ -241,6 +267,7 @@ function Shell() {
                 <Route path="/groups" element={<Groups />} />
                 <Route path="/staff" element={<StaffPage />} />
                 <Route path="/stats" element={<StatsPage />} />
+                <Route path="/users" element={me && me.role !== 'admin' ? <Navigate to="/presend" replace /> : <UsersPage />} />
                 <Route path="*" element={<Navigate to="/presend" replace />} />
               </Routes>
               </Suspense>

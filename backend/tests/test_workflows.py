@@ -13,6 +13,15 @@ from tests.test_flow import TG, client, fake, outbound, setup_groups, tg  # noqa
 NOW = int(time.time())
 
 
+async def login_as(client, name: str, role: str = "agent") -> dict:  # noqa: F811
+    """建一个个人账号并登录，返回带 token 的请求头。"""
+    username = f"u{abs(hash(name)) % 10**6}"
+    await client.post("/api/users", json={"username": username, "display_name": name,
+                                           "password": "password123", "role": role})
+    r = await client.post("/api/auth/login", json={"username": username, "password": "password123"})
+    return {"Authorization": f"Bearer {r.json()['token']}"}
+
+
 @pytest.fixture
 async def logdb():
     path = os.path.join(tempfile.mkdtemp(), "newapi.db")
@@ -90,8 +99,8 @@ async def test_routes_supplier_by_channel_and_timeline(client, fake, logdb):  # 
     assert kinds[:3] == ["created", "classified", "queued"]
     assert "lookup" in kinds and "finding" in kinds
 
-    r = await client.patch(f"/api/incidents/{inc['id']}",
-                           json={"status": "resolved", "note": "上游已恢复", "actor": "小王"})
+    r = await client.patch(f"/api/incidents/{inc['id']}", headers=await login_as(client, "小王"),
+                           json={"status": "resolved", "note": "上游已恢复"})
     assert r.json()["resolved_at"]
     ev = (await client.get(f"/api/incidents/{inc['id']}/events")).json()
     assert ev[-1]["kind"] == "note" and ev[-1]["actor"] == "小王"
@@ -460,9 +469,9 @@ async def test_manual_send_and_human_takeover(client, fake):  # noqa: F811
                         if not m["from_us"])
 
     # 1) 后台人工发送，引用客户那条
-    r = await client.post(f"/api/groups/{cid}/send", json={
+    r = await client.post(f"/api/groups/{cid}/send", headers=await login_as(client, "小王"), json={
         "text": "我是小王，这个我来跟进", "incident_id": inc["id"],
-        "reply_to_message_id": customer_msg["id"], "actor": "小王"})
+        "reply_to_message_id": customer_msg["id"]})
     assert r.status_code == 200 and r.json()["status"] == "sent" and r.json()["purpose"] == "manual"
     assert fake.sent[-1][1] == "我是小王，这个我来跟进"
     cur = (await client.get(f"/api/incidents/{inc['id']}")).json()
@@ -606,3 +615,59 @@ async def test_screenshot_is_read_into_message(client, fake, monkeypatch):  # no
     assert inc["request_id"] == "req-shot-1" and inc["category"] == "rate_limit"
     msgs = (await client.get(f"/api/incidents/{inc['id']}/messages")).json()
     assert "又这样了" in msgs[0]["text"] and "[截图内容]" in msgs[0]["text"]
+
+
+async def test_accounts_roles_and_assignment(client, fake):  # noqa: F811
+    """个人账号登录、权限、值班自动分配（负载最少）、指派、我的事件、升级 @ 被指派人。"""
+    cid, _ = await setup_groups(client)
+    await client.patch(f"/api/groups/{cid}", json={"backup_owner": "lee"})
+    a = await login_as(client, "小王")
+    b = await login_as(client, "小李")
+    # 普通支持不能建账号 / 改链路
+    assert (await client.post("/api/users", headers=a, json={
+        "username": "x1", "display_name": "x", "password": "password123"})).status_code == 403
+    assert (await client.post("/api/workflows", headers=a, json={"name": "x"})).status_code == 403
+    assert (await client.get("/api/me", headers=a)).json()["name"] == "小王"
+    assert (await client.post("/api/auth/login", json={"username": "nope", "password": "x"})).status_code == 401
+    # 两人都值班 → 轮流分配
+    await client.patch("/api/me", headers=a, json={"on_duty": True})
+    await client.patch("/api/me", headers=b, json={"on_duty": True})
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 201, "seedance 报错了"))
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 202, "另外 seedance 一直 429"))
+    incs = (await client.get("/api/incidents")).json()
+    assert len(incs) == 2 and {i["assignee_id"] for i in incs} == {
+        (await client.get("/api/me", headers=a)).json()["id"], (await client.get("/api/me", headers=b)).json()["id"]}
+    mine = (await client.get("/api/incidents?mine=true", headers=a)).json()
+    assert len(mine) == 1
+    # 升级时 @ 被指派人（姓名 → 我方人员账号）
+    await client.post("/api/staff", json={"name": "小王", "platform": "telegram", "account": "wang_tg"})
+    me_id = (await client.get("/api/me", headers=a)).json()["id"]
+    await client.patch(f"/api/incidents/{mine[0]['id']}", headers=b, json={"assignee_id": me_id})
+    await client.post("/api/simulate", json={"chat_id": "900", "chat_name": "内部群", "text": "hi"})
+    g = next(x for x in (await client.get("/api/groups")).json() if x["external_id"] == "900")
+    await client.patch(f"/api/groups/{g['id']}", json={"kind": "internal"})
+    from app.db import SessionLocal
+    from app.models import Group, Incident
+    from app.services.escalation import escalate
+    async with SessionLocal() as s:
+        inc = await s.get(Incident, mine[0]["id"])
+        inc.escalated_at = None
+        await escalate(s, await s.get(Group, cid), inc, "测试")
+        await s.commit()
+    esc = next(o for o in await outbound(client) if o["purpose"] == "escalation")
+    assert esc["mentions"] == ["wang_tg", "lee"]
+    # 退出后 token 失效
+    await client.post("/api/auth/logout", headers=a)
+    assert (await client.get("/api/me", headers=a)).status_code == 401
+
+
+async def test_feishu_encrypted_webhook(client, monkeypatch):  # noqa: F811
+    from app.config import settings
+    from tests.test_adapters import _feishu_encrypt
+    monkeypatch.setattr(settings, "feishu_encrypt_key", "k3y")
+    enc = _feishu_encrypt({"type": "url_verification", "token": "fs-token", "challenge": "c1"}, "k3y")
+    r = await client.post("/api/webhooks/feishu", json={"encrypt": enc})
+    assert r.json() == {"challenge": "c1"}
+    bad = _feishu_encrypt({"type": "url_verification", "token": "wrong", "challenge": "c1"}, "k3y")
+    assert (await client.post("/api/webhooks/feishu", json={"encrypt": bad})).status_code == 403
+    assert (await client.post("/api/webhooks/feishu", json={"encrypt": "garbage"})).status_code == 400

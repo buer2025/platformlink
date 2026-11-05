@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     # Webhook 校验
     telegram_webhook_secret: str = ""  # setWebhook 的 secret_token
     feishu_verification_token: str = ""
+    # 飞书开启「Encrypt Key」时填写：用于解密事件与校验签名
+    feishu_encrypt_key: str = ""
     wecom_forward_secret: str = ""  # 存档拉取进程转发时带的 X-Forward-Secret
 
     telegram_bot_token: str = ""

@@ -160,7 +160,7 @@ function Editor({ g, onClose }: { g: Group | undefined; onClose: () => void }) {
     const st = g.style ?? {}
     setF({
       name: g.name, kind: g.kind, automation: g.automation, level: g.level, models: g.models, contacts: g.contacts,
-      tags: g.tags, api_users: g.api_users, channel_ids: g.channel_ids.map(String),
+      tags: g.tags, api_users: g.api_users, bot_webhook: g.bot_webhook ?? '', channel_ids: g.channel_ids.map(String),
       owner: g.owner, backup_owner: g.backup_owner, extra_delay_seconds: String(g.extra_delay_seconds),
       address: str(st.address), tone: str(st.tone), summary: str(st.summary), phrases: list(st.phrases), taboos: list(st.taboos),
       particles: list(st.particles), emoji: list(st.emoji), samples: lines(st.samples),
@@ -183,7 +183,7 @@ function Editor({ g, onClose }: { g: Group | undefined; onClose: () => void }) {
       put('samples', splitLines(f.samples))
       return patch<Group>(`/groups/${g!.id}`, {
         name: f.name.trim() || g!.name, kind: f.kind, automation: f.automation, level: f.level.trim(),
-        models: f.models, contacts: f.contacts, tags: f.tags, api_users: f.api_users,
+        models: f.models, contacts: f.contacts, tags: f.tags, api_users: f.api_users, bot_webhook: f.bot_webhook.trim(),
         channel_ids: (f.channel_ids as string[]).map(Number).filter((n) => Number.isInteger(n) && n > 0),
         owner: f.owner.trim(), backup_owner: f.backup_owner.trim(),
         extra_delay_seconds: Math.max(0, parseInt(f.extra_delay_seconds) || 0), style,
@@ -209,6 +209,11 @@ function Editor({ g, onClose }: { g: Group | undefined; onClose: () => void }) {
               {Object.entries(autoLabel).map(([k, [v]]) => <option key={k} value={k}>{v}</option>)}</Select></Field>
             <Field label="额外倒计时（秒）" hint="VIP 群可加长"><Input inputMode="numeric" value={f.extra_delay_seconds} onChange={ev('extra_delay_seconds')} /></Field>
           </Section>
+          {g!.platform === 'wecom' && (
+            <Section title="企业微信发送" desc="企业微信用「群机器人」发消息：群设置 → 添加群机器人 → 复制 Webhook 地址。群机器人只能加到内部群；外部客户群企业微信不允许机器人发消息，请把自动化设为「需人工确认」，由同事复制 AI 草稿发送。">
+              <Field label="群机器人 Webhook" wide><Input value={f.bot_webhook} onChange={ev('bot_webhook')} placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…" /></Field>
+            </Section>
+          )}
           <Section title="业务标记" desc="标识可被处理链路用来限定范围，也会告诉 Agent 这个群的背景。">
             <Field label="标识" hint="回车添加"><TagInput tone="accent" value={f.tags} onChange={set('tags')} placeholder="VIP, 视频, 海外" /></Field>
             <Field label="等级"><Input value={f.level} onChange={ev('level')} placeholder="VIP / KA / 主力供应商" /></Field>

@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent import llm
-from app.models import Group, GroupKind, Incident, Staff
+from app.models import Group, GroupKind, Incident, Staff, User
 from app.services import presend
 from app.services.events import record
 from app.services.style import style_of
@@ -31,7 +31,9 @@ async def escalate(session: AsyncSession, group: Group, incident: Incident, reas
         return False
     incident.escalated_at = presend.utcnow()
     incident.escalation_reason = reason
-    owners = [x for x in (group.owner, group.backup_owner) if x]
+    assignee = await session.get(User, incident.assignee_id) if incident.assignee_id else None
+    owners = list(dict.fromkeys(x for x in (assignee and assignee.display_name, group.owner,
+                                            group.backup_owner) if x))
     internal = await session.scalar(select(Group).where(Group.kind == GroupKind.internal)
                                     .order_by(Group.id))
     if internal is not None:

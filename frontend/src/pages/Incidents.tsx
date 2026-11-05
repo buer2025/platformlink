@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import {
   BookPlus, Bot, CornerUpLeft, Check, ChevronRight, CircleAlert, Database, GitMerge, Lightbulb, MessageCircle,
-  NotebookPen, Pencil, type LucideIcon, RotateCcw, Send, Sparkles, Timer, Wrench, X, Zap,
+  NotebookPen, Pencil, UserRound, type LucideIcon, RotateCcw, Send, Sparkles, Timer, Wrench, X, Zap,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useState, type ReactNode } from 'react'
@@ -10,11 +10,11 @@ import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
   ago, api, categoryLabel, fmtTime, patch, post, respLabel,
-  type Group, type Incident, type IncidentEvent, type Knowledge, type Message, type Workflow,
+  type Group, type Incident, type IncidentEvent, type Knowledge, type Me, type Message, type User, type Workflow,
 } from '../api'
 import { useHotkeys, useListNav, useNow } from '../hooks'
 import {
-  Badge, Button, Card, Drawer, Empty, Input, Kbd, listItem, PageHeader, ScoreRing, Segmented, Skeleton, type Tone,
+  Avatar, Badge, Button, Card, Drawer, Empty, Input, Kbd, Select, listItem, PageHeader, ScoreRing, Segmented, Skeleton, type Tone,
 } from '../ui'
 import { Composer } from '../components/Composer'
 import { KnowledgeEditor } from './Knowledge'
@@ -50,6 +50,9 @@ const eventMeta: Record<string, [string, LucideIcon, Tone]> = {
   auto_closed: ['自动关闭', Timer, 'slate'],
   memory_saved: ['沉淀记忆', Lightbulb, 'ok'],
   human_takeover: ['人工接管', Pencil, 'info'],
+  assigned: ['指派', UserRound, 'accent' as Tone],
+  approved: ['确认发送', Check, 'ok'],
+  error: ['处理出错', CircleAlert, 'bad'],
   note: ['备注', NotebookPen, 'slate'],
   knowledge_saved: ['沉淀知识', BookPlus, 'ok'],
 }
@@ -92,6 +95,36 @@ function TimelineItem({ e, last }: { e: IncidentEvent; last: boolean }) {
         ) : <p className="mt-0.5 text-[13px] whitespace-pre-wrap text-fg-2">{e.text}</p>}
       </div>
     </motion.li>
+  )
+}
+
+/** 负责人：认领 / 指派。 */
+function Assignee({ incident }: { incident: Incident }) {
+  const qc = useQueryClient()
+  const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: () => api<User[]>('/users') })
+  const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api<Me>('/me') })
+  const set = useMutation({
+    mutationFn: (id: number | null) => patch<Incident>(`/incidents/${incident.id}`, { assignee_id: id }),
+    onSuccess: (r) => toast.success(r.assignee_id ? `已指派给 ${users.find((u) => u.id === r.assignee_id)?.display_name}` : '已取消指派'),
+    onError: (e) => toast.error(e instanceof Error ? e.message : String(e)),
+    onSettled: () => { qc.invalidateQueries({ queryKey: ['incidents'] }); qc.invalidateQueries({ queryKey: ['events', incident.id] }) },
+  })
+  const cur = users.find((u) => u.id === incident.assignee_id)
+  return (
+    <div className="flex items-center gap-3 rounded-xl bg-panel-2/60 px-4 py-2.5">
+      {cur ? <Avatar name={cur.display_name} size={26} /> : <span className="grid size-[26px] place-items-center rounded-full border border-dashed border-line-strong text-fg-3"><UserRound size={13} /></span>}
+      <div className="min-w-0 flex-1 text-[13px]">
+        <div className="text-[11px] text-fg-3">负责人</div>
+        <div className="font-medium">{cur?.display_name ?? '未指派'}</div>
+      </div>
+      {me?.id && incident.assignee_id !== me.id && (
+        <Button size="sm" variant="primary" onClick={() => set.mutate(me.id)}>认领</Button>
+      )}
+      <Select className="w-32" value={incident.assignee_id ?? ''} onChange={(e) => set.mutate(e.target.value ? Number(e.target.value) : null)}>
+        <option value="">未指派</option>
+        {users.filter((u) => u.active).map((u) => <option key={u.id} value={u.id}>{u.display_name}{u.on_duty ? ' · 值班' : ''}</option>)}
+      </Select>
+    </div>
   )
 }
 
@@ -187,6 +220,7 @@ function IncidentDrawer({ i, groups, workflows, onClose }: {
           </div>
           {/* 第二层：依据（默认折叠到 4 行） */}
           {i.evidence && <Evidence text={i.evidence} />}
+          <Assignee incident={i} />
           {/* 第三层：事实，弱化展示 */}
           <dl className="grid grid-cols-2 gap-x-6 gap-y-3 rounded-xl bg-panel-2/60 px-4 py-3.5 sm:grid-cols-3">
             <Fact label="request_id" mono>{i.request_id}</Fact>
@@ -233,7 +267,7 @@ function IncidentDrawer({ i, groups, workflows, onClose }: {
   )
 }
 
-type Filter = 'active' | 'waiting_supplier' | 'resolved' | 'all'
+type Filter = 'mine' | 'active' | 'waiting_supplier' | 'resolved' | 'all'
 
 export default function Incidents() {
   const now = useNow(15000)
@@ -244,7 +278,11 @@ export default function Incidents() {
   const { data: wfList = [] } = useQuery({ queryKey: ['workflows'], queryFn: () => api<Workflow[]>('/workflows') })
   const groups = new Map(groupList.map((g) => [g.id, g]))
   const workflows = new Map(wfList.map((w) => [w.id, w]))
-  const rows = data.filter((i) => filter === 'all' ? true : filter === 'active' ? i.status !== 'resolved' : i.status === filter)
+  const { data: me } = useQuery({ queryKey: ['me'], queryFn: () => api<Me>('/me') })
+  const { data: userList = [] } = useQuery({ queryKey: ['users'], queryFn: () => api<User[]>('/users') })
+  const users = new Map(userList.map((u) => [u.id, u]))
+  const match = (i: Incident, f: Filter) => f === 'all' ? true : f === 'mine' ? i.assignee_id === me?.id && i.status !== 'resolved' : f === 'active' ? i.status !== 'resolved' : i.status === f
+  const rows = data.filter((i) => match(i, filter))
   const openId = Number(params.get('open')) || null
   const setOpen = (id: number | null) => setParams(id ? { open: String(id) } : {}, { replace: true })
   const { sel, setSel, current, move } = useListNav(rows)
@@ -253,11 +291,12 @@ export default function Incidents() {
     enter: () => current && setOpen(current.id),
   }, !openId)
 
-  const count = (f: Filter) => data.filter((i) => f === 'all' || (f === 'active' ? i.status !== 'resolved' : i.status === f)).length
+  const count = (f: Filter) => data.filter((i) => match(i, f)).length
   return (
     <div>
       <PageHeader title="事件中心" desc="每个客户问题从反馈、排查、转交到解决的完整记录。">
         <Segmented value={filter} onChange={setFilter} options={[
+          ...(me?.id ? [{ value: 'mine' as Filter, label: <>我的 <span className="text-fg-3 tabular-nums">{count('mine')}</span></> }] : []),
           { value: 'active', label: <>进行中 <span className="text-fg-3 tabular-nums">{count('active')}</span></> },
           { value: 'waiting_supplier', label: '等供应商' },
           { value: 'resolved', label: '已解决' },
@@ -291,6 +330,9 @@ export default function Incidents() {
                       {i.related_messages > 1 && <span>合并 {i.related_messages} 条</span>}
                     </div>
                   </div>
+                  {i.assignee_id && users.get(i.assignee_id) && (
+                    <span title={`负责人：${users.get(i.assignee_id)!.display_name}`}><Avatar name={users.get(i.assignee_id)!.display_name} size={24} /></span>
+                  )}
                   <div className="hidden shrink-0 flex-col items-end gap-1 sm:flex">
                     <Badge tone={st} dot>{sl}</Badge>
                     <span className="text-[11px] text-fg-3">{ago(i.created_at, now)}</span>

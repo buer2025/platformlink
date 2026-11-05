@@ -17,6 +17,7 @@ export type Group = {
   tags: string[]
   api_users: string[]
   channel_ids: number[]
+  bot_webhook: string
 }
 
 export type Outbound = {
@@ -59,6 +60,7 @@ export type Incident = {
   escalation_reason: string
   human_until: string | null
   human_by: string
+  assignee_id: number | null
   created_at: string
 }
 
@@ -107,6 +109,9 @@ export type Message = {
   incident_id: number | null
   created_at: string
 }
+
+export type User = { id: number; username: string; display_name: string; role: 'admin' | 'agent'; active: boolean; on_duty: boolean }
+export type Me = { id: number | null; name: string; role: 'admin' | 'agent'; on_duty: boolean; builtin: boolean }
 
 export type Staff = { id: number; name: string; platform: Platform; account: string }
 

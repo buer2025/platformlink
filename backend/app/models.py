@@ -29,6 +29,33 @@ class AutomationMode(enum.StrEnum):
     observe = "observe"  # 只观察不发言
 
 
+class UserRole(enum.StrEnum):
+    admin = "admin"  # 可管理账号、链路、人员
+    agent = "agent"  # 技术支持：处理事件、发消息、打标记
+
+
+class User(Base):
+    """后台账号：每个技术支持一个，操作都记在本人名下。"""
+
+    __tablename__ = "users"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    username: Mapped[str] = mapped_column(String(64), unique=True)
+    display_name: Mapped[str] = mapped_column(String(100))  # 与「我方人员」姓名一致时，可被 @ 到 IM 账号
+    password_hash: Mapped[str] = mapped_column(String(300))
+    role: Mapped[UserRole] = mapped_column(Enum(UserRole), default=UserRole.agent)
+    active: Mapped[bool] = mapped_column(default=True)
+    on_duty: Mapped[bool] = mapped_column(default=False)  # 值班中：参与自动分配
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class ApiSession(Base):
+    __tablename__ = "api_sessions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class Staff(Base):
     """我方人员在各平台的账号；他们在群里的发言不会被当成客户问题。"""
 
@@ -77,6 +104,8 @@ class Group(Base):
     backup_owner: Mapped[str] = mapped_column(String(100), default="")
     # 自由标识，例如 ["VIP", "视频", "海外"]；链路可按标识限定适用的群
     tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # 企业微信群机器人 Webhook 地址（企业微信用它发消息）
+    bot_webhook: Mapped[str] = mapped_column(String(500), default="")
     # 与日志库（new-api）的对应关系：客户群 → 用户 ID/用户名；供应商群 → 渠道 ID
     api_users: Mapped[list[str]] = mapped_column(JSON, default=list)
     channel_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
@@ -175,6 +204,7 @@ class Incident(Base):
     # 人工接管到此时间为止：期间 AI 的消息一律等人工确认，不自动发
     human_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     human_by: Mapped[str] = mapped_column(String(100), default="")
+    assignee_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 

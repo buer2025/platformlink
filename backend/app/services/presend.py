@@ -108,9 +108,14 @@ async def deliver(session: AsyncSession, item: Outbound, allowed=OPEN) -> bool:
     await session.refresh(item)
     group = await session.get(Group, item.group_id)
     try:
-        ext_id = await get_adapter(group.platform).send(
-            group.external_id, item.text, item.reply_to_external_id, item.mentions
-        )
+        adapter = get_adapter(group.platform)
+        if group.platform == "wecom":
+            ext_id = await adapter.send(group.external_id, item.text, item.reply_to_external_id,
+                                        item.mentions, webhook=group.bot_webhook)
+        else:
+            ext_id = await adapter.send(
+                group.external_id, item.text, item.reply_to_external_id, item.mentions
+            )
     except Exception as e:  # noqa: BLE001 — 任何发送失败都记录到队列
         log.warning("send outbound %s failed: %s", item.id, e)
         item.status = OutboundStatus.failed
