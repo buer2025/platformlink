@@ -72,7 +72,7 @@ async function api(path, body, method) {
   // 键盘：J 选中第一条，E 进入编辑，Esc 退出
   await page.keyboard.press('j')
   await page.keyboard.press('e')
-  await page.locator('textarea').waitFor()
+  await page.locator('[data-testid=outbound] textarea').first().waitFor()
   await page.keyboard.press('Escape')
   check(true, '键盘 J / E 操作队列')
   // 立即发送（未配置 bot token，应显示失败与重新发送）
