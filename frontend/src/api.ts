@@ -14,6 +14,9 @@ export type Group = {
   extra_delay_seconds: number
   owner: string
   backup_owner: string
+  tags: string[]
+  api_users: string[]
+  channel_ids: number[]
 }
 
 export type Outbound = {
@@ -48,7 +51,47 @@ export type Incident = {
   supplier_last_reply: string
   reminders: number
   related_messages: number
+  workflow_id: number | null
+  lookup_result: string
+  knowledge_ids: number[]
+  resolved_at: string | null
   created_at: string
+}
+
+export type IncidentEvent = { id: number; kind: string; text: string; actor: string; created_at: string }
+
+export type Lookup = 'request_id' | 'recent_errors' | 'usage' | 'channel'
+
+export type Workflow = {
+  id: number
+  name: string
+  description: string
+  enabled: boolean
+  priority: number
+  categories: string[]
+  keywords: string[]
+  group_tags: string[]
+  lookups: Lookup[]
+  instructions: string
+  route_supplier: boolean
+  automation: '' | 'confirm'
+}
+
+export type Knowledge = {
+  id: number
+  title: string
+  symptoms: string
+  keywords: string[]
+  models: string[]
+  responsible: string
+  root_cause: string
+  solution: string
+  reply_template: string
+  source_incident_id: number | null
+  enabled: boolean
+  hits: number
+  created_at: string
+  updated_at: string
 }
 
 export type Message = {
@@ -127,6 +170,19 @@ export const post = <T,>(path: string, body?: unknown) =>
 export const patch = <T,>(path: string, body: unknown) =>
   api<T>(path, { method: 'PATCH', body: JSON.stringify(body) })
 
+export const put = <T,>(path: string, body: unknown) =>
+  api<T>(path, { method: 'PUT', body: JSON.stringify(body) })
+export const del = <T,>(path: string) => api<T>(path, { method: 'DELETE' })
+
+export function ago(s: string | null, now = Date.now()) {
+  if (!s) return '—'
+  const d = Math.round((now - Date.parse(s)) / 1000)
+  if (d < 45) return '刚刚'
+  if (d < 3600) return `${Math.round(d / 60)} 分钟前`
+  if (d < 86400) return `${Math.round(d / 3600)} 小时前`
+  return `${Math.round(d / 86400)} 天前`
+}
+
 export const fmtTime = (s: string | null) =>
   s ? new Date(s).toLocaleString('zh-CN', { hour12: false }) : '—'
 
@@ -134,4 +190,14 @@ export const platformLabel: Record<Platform, string> = {
   telegram: 'Telegram',
   feishu: '飞书',
   wecom: '企业微信',
+}
+
+export const categoryLabel: Record<string, string> = {
+  error: '调用报错', rate_limit: '429 限流', usage_request: '用量需求', other: '其他',
+}
+export const lookupLabel: Record<Lookup, string> = {
+  request_id: '按 request_id 查日志', recent_errors: '近期错误与渠道分布', usage: '用量统计', channel: '渠道状态',
+}
+export const respLabel: Record<string, [string, 'info' | 'violet' | 'warn' | 'slate']> = {
+  customer: ['客户侧', 'info'], us: ['我方', 'violet'], supplier: ['供应商', 'warn'], unknown: ['待定', 'slate'],
 }

@@ -212,3 +212,20 @@ async def _cls():
     from app.agent.llm import Classification
     return Classification(is_issue=True, category="error", model="seedance", request_id="",
                           summary="seedance 报错", confidence=90)
+
+
+async def test_seed_defaults_are_complete(client):  # noqa: F811
+    from app.db import SessionLocal
+    from app.services.seed import seed_defaults
+    async with SessionLocal() as s:
+        await seed_defaults(s)
+        await seed_defaults(s)  # 幂等
+    rows = (await client.get("/api/workflows")).json()
+    assert [w["name"] for w in rows] == ["模型调用问题", "模型用量需求"]
+    assert rows[1]["group_tags"] == [] and rows[1]["automation"] == "confirm"
+
+
+async def test_knowledge_substring_search(client):  # noqa: F811
+    await client.post("/api/knowledge", json={"title": "客户反馈 seedance 一直 429", "symptoms": ""})
+    assert len((await client.get("/api/knowledge", params={"q": "429"})).json()) == 1
+    assert (await client.get("/api/knowledge", params={"q": "超时"})).json() == []

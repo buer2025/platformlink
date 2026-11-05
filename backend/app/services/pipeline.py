@@ -191,7 +191,8 @@ async def handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident |
                "参考知识：" + "；".join(f"#{k.id} {k.title}" for k in kb))
     instructions = wf.instructions if wf else ""
     preloaded = ev.text + (f"\n\n## 知识库命中\n{knowledge.as_prompt(kb)}" if kb else "")
-    ctx = harness.Ctx(session=session, group=group, incident=incident, c=c, found=ev.found,
+    ctx = harness.Ctx(session=session, group=group, incident=incident, c=c, text=m.text,
+                      found=ev.found,
                       channel_ids=list(ev.channel_ids), knowledge_ids=[k.id for k in kb])
     f = await harness.run(ctx, instructions, preloaded)
     if f is None:  # 无 Key / 调用失败：单次判断或规则兜底

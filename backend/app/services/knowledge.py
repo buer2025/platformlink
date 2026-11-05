@@ -26,6 +26,9 @@ def score(k: Knowledge, text: str, model: str, toks: set[str]) -> float:
     elif k.models and model:
         s -= 1  # 明确属于其他模型的经验降权
     s += 2 * sum(1 for kw in k.keywords or [] if kw and kw.lower() in low)
+    q = text.strip().lower()
+    if q and len(q) <= 40 and q in f"{k.title}\n{k.symptoms}".lower():  # 搜索框短查询：直接子串命中
+        s += 3
     overlap = toks & tokens(k.symptoms + " " + k.title)
     s += len(overlap) * 0.5
     return s

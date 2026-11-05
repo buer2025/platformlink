@@ -47,13 +47,35 @@ curl -XPOST localhost:8000/api/simulate -H "Authorization: Bearer $ADMIN_TOKEN" 
 
 所有回调都会校验密钥，未配置对应密钥时该平台回调一律拒绝。
 
+## 排查 Agent
+
+客户消息 → 分诊（类别 / 模型 / request_id）→ 匹配**处理链路** → 按链路预查日志库 → **工具调用循环**（参考 Claude Code harness）→ 结论 + 自检 → 预发队列。
+
+- **处理链路**（后台「处理链路」）：管理员定义触发条件（类别、关键词、群标识）、预查询步骤、给 Agent 的处理说明、是否转交供应商、是否强制人工确认。首次启动自动创建「模型调用问题」「模型用量需求」两条。
+- **工具**：`query_request_id`、`recent_errors`、`usage_stats`、`channel_status`、`search_knowledge`、`similar_incidents`、`group_history`。Agent 自主决定调用顺序（最多 8 步），每次调用都写进事件时间线。
+- **准确率护栏**：没有日志证据也没有命中知识时，结论最高 60 分，不会自动发出；判断不出责任方最高 50 分。
+- **知识沉淀**：事件解决后点「沉淀为知识」，Agent 根据处理过程起草经验条目；之后按模型、关键词、现象自动检索，命中次数会累计。
+
+### 日志库（new-api）
+
+```
+LOG_DATABASE_URL=mysql+aiomysql://readonly:密码@host:3306/new-api   # 只读账号
+```
+
+读取 `logs` 与 `channels` 表（启动后反射表结构，兼容有无 `request_id` 列的版本）。在「群与标记」里：客户群填 new-api **用户名/用户 ID**，供应商群填**渠道 ID**——日志定位到哪个渠道出错，就精确转交到哪个供应商群。群详情里可「测试查询」验证绑定。
+
+## 键盘操作
+
+`⌘K` 命令面板 · `G` 然后 `P/I/W/K/G/S` 切换页面 · `J/K` 上下 · `↵` 打开 · `⌘↵` 发送/保存 · `E` 修改 · `R` 标记解决 · `C` 新建 · `⇧T` 主题 · `?` 全部快捷键
+
 ## 上线检查清单
 
 1. 设置 `ADMIN_TOKEN`（足够长的随机串）
 2. 每个平台配置回调密钥
 3. 在「我方人员」登记所有技术支持账号（否则他们在客户群的发言会被当成客户问题）
 4. 新群默认「只观察」：逐个在「群与标记」中设为客户群/供应商群、填涉及模型和对接人后再开启自动化
-5. 配置 `ANTHROPIC_API_KEY`
+5. 配置 `ANTHROPIC_API_KEY`（使用中转时另设 `ANTHROPIC_BASE_URL`）
+6. 配置 `LOG_DATABASE_URL`，并给客户群 / 供应商群绑定 new-api 用户与渠道
 
 ## 目录
 

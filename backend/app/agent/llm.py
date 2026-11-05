@@ -10,7 +10,7 @@ log = logging.getLogger(__name__)
 
 
 class Classification(BaseModel):
-    is_issue: bool = Field(description="是否是需要处理的问题/故障反馈")
+    is_issue: bool = Field(description="是否需要我方处理：故障/报错反馈，或用量、扩容、开通等需求；闲聊和致谢为 false")
     category: str = Field(description="error（调用报错）| rate_limit（429/限流）| usage_request（用量/扩容/开通/额度需求）| other")
     model: str = Field(description="涉及的模型名，未知为空")
     request_id: str = Field(description="消息中的 request_id，没有为空")
@@ -97,7 +97,7 @@ def _rule_classify(text: str) -> Classification:
 
 async def classify(text: str) -> Classification:
     result = await _parse(
-        "你是模型 API 聚合平台的技术支持分诊员。判断客户群里这条消息是否是问题反馈并抽取字段。",
+        "你是模型 API 聚合平台的技术支持分诊员。判断客户群里这条消息是否需要处理（故障反馈或用量需求）并抽取字段。",
         text,
         Classification,
         effort="low",

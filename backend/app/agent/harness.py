@@ -35,6 +35,7 @@ class Ctx:
     group: Group
     incident: Incident
     c: llm.Classification
+    text: str = ""  # 客户原话（分诊摘要可能丢细节，例如具体的目标量级）
     found: bool = False
     channel_ids: list[int] = field(default_factory=list)
     knowledge_ids: list[int] = field(default_factory=list)
@@ -209,6 +210,7 @@ SYSTEM = """你是「PlatformLink」的排查 Agent，服务于一家模型 API 
 - customer_reply：像真人技术支持在群里说话，2~3 句，口语化、不机械；不暴露渠道编号、供应商名称、内部系统。
 - supplier_note：发给供应商群，带上模型、时间段、错误现象、错误量与示例时间等关键信息，客气直接；
   channel_id 是我方内部编号，供应商看不懂，不要写进去。时间直接引用日志里的时间，不要自己推算。
+- 客户已经说明的信息（目标量级、时间、截图内容）不要再问一遍。
 - self_check：写下你的结论最可能错在哪里，以及为什么仍然这样判断。
 
 最后必须调用 submit_finding 提交结论。"""
@@ -219,7 +221,7 @@ def _context(ctx: Ctx, instructions: str, preloaded: str) -> str:
     parts = [
         (f"## 客户群\n名称: {g.name}；等级: {g.level or '-'}；标识: {', '.join(g.tags or []) or '-'}；"
         f"签约模型: {', '.join(g.models or []) or '-'}；日志库用户: {', '.join(g.api_users or []) or '未绑定'}"),
-        (f"## 客户消息\n{ctx.c.summary}\n（分诊：类别 {ctx.c.category}，模型 {ctx.c.model or '未知'}，"
+        (f"## 客户原话\n{ctx.text or ctx.c.summary}\n（分诊：类别 {ctx.c.category}，模型 {ctx.c.model or '未知'}，"
         f"request_id {ctx.c.request_id or '未提供'}）"),
     ]
     if instructions:

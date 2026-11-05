@@ -1,95 +1,277 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
-import { api, fmtTime, patch, type Group, type Incident, type Message } from '../api'
-import { Badge, btn, Empty, ErrorText, Loading } from '../ui'
+import clsx from 'clsx'
+import {
+  BookPlus, Bot, Check, ChevronRight, CircleAlert, Database, GitMerge, Lightbulb, MessageCircle,
+  NotebookPen, Pencil, type LucideIcon, RotateCcw, Send, Sparkles, Timer, Wrench, X, Zap,
+} from 'lucide-react'
+import { AnimatePresence, motion } from 'motion/react'
+import { useState, type ReactNode } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { toast } from 'sonner'
+import {
+  ago, api, categoryLabel, fmtTime, patch, post, respLabel,
+  type Group, type Incident, type IncidentEvent, type Knowledge, type Message, type Workflow,
+} from '../api'
+import { useHotkeys, useListNav, useNow } from '../hooks'
+import {
+  Badge, Button, Card, Drawer, Empty, Input, Kbd, listItem, PageHeader, ScoreRing, Segmented, Skeleton, type Tone,
+} from '../ui'
+import { KnowledgeEditor } from './Knowledge'
 
-const respLabel: Record<string, [string, string]> = {
-  customer: ['客户侧', 'blue'], us: ['我方', 'purple'], supplier: ['供应商', 'amber'], unknown: ['待定', 'slate'],
+const statusLabel: Record<Incident['status'], [string, Tone]> = {
+  open: ['新建', 'slate'], investigating: ['排查中', 'info'], waiting_supplier: ['等待供应商', 'warn'], resolved: ['已解决', 'ok'],
 }
-const statusLabel: Record<Incident['status'], [string, string]> = {
-  open: ['新建', 'slate'], investigating: ['排查中', 'blue'], waiting_supplier: ['等待供应商', 'amber'], resolved: ['已解决', 'green'],
-}
-const catLabel: Record<string, string> = { error: '调用报错', rate_limit: '429 限流', other: '其他' }
 
-function Detail({ i, groups }: { i: Incident; groups: Map<number, Group> }) {
-  const qc = useQueryClient()
-  const { data: msgs = [] } = useQuery({
-    queryKey: ['incident-msgs', i.id],
-    queryFn: () => api<Message[]>(`/incidents/${i.id}/messages`),
-  })
-  const update = useMutation({
-    mutationFn: (status: Incident['status']) => patch(`/incidents/${i.id}`, { status }),
-    onSettled: () => qc.invalidateQueries({ queryKey: ['incidents'] }),
-  })
+const eventMeta: Record<string, [string, LucideIcon, Tone]> = {
+  created: ['客户反馈', MessageCircle, 'slate'],
+  merged: ['追加反馈', GitMerge, 'slate'],
+  classified: ['分诊', Sparkles, 'violet'],
+  lookup: ['日志预查询', Database, 'info'],
+  knowledge: ['命中知识', Lightbulb, 'warn'],
+  tool: ['Agent 调用工具', Wrench, 'info'],
+  finding: ['Agent 结论', Bot, 'accent' as Tone],
+  queued: ['进入预发', Timer, 'slate'],
+  sent: ['已发送', Send, 'ok'],
+  send_failed: ['发送失败', CircleAlert, 'bad'],
+  edited: ['人工修改', Pencil, 'warn'],
+  cancelled: ['已取消', X, 'slate'],
+  supplier_reply: ['供应商回复', MessageCircle, 'warn'],
+  no_supplier: ['需人工转交', CircleAlert, 'bad'],
+  manual: ['人工操作', Pencil, 'slate'],
+  note: ['备注', NotebookPen, 'slate'],
+  knowledge_saved: ['沉淀知识', BookPlus, 'ok'],
+}
+
+const toneColor: Record<string, string> = {
+  slate: 'text-fg-3 bg-panel-2', info: 'text-info bg-info-soft', ok: 'text-ok bg-ok-soft', warn: 'text-warn bg-warn-soft',
+  bad: 'text-bad bg-bad-soft', violet: 'text-violet bg-violet-soft', accent: 'text-accent bg-accent-soft',
+}
+
+function TimelineItem({ e, last }: { e: IncidentEvent; last: boolean }) {
+  const [label, Icon, tone] = eventMeta[e.kind] ?? [e.kind, Zap, 'slate' as Tone]
+  const long = e.kind === 'tool' || e.kind === 'lookup' || e.text.length > 220
+  const [open, setOpen] = useState(e.kind === 'finding')
+  const [head, ...rest] = e.text.split('\n')
   return (
-    <div className="space-y-3 border-t bg-slate-50 p-4 text-sm">
-      <div className="grid gap-2 sm:grid-cols-2">
-        <div><span className="text-slate-500">request_id：</span><span className="font-mono">{i.request_id || '—'}</span></div>
-        <div><span className="text-slate-500">模型：</span>{i.model || '—'}</div>
-        <div><span className="text-slate-500">供应商群：</span>{i.supplier_group_id ? groups.get(i.supplier_group_id)?.name : '—'}</div>
-        <div><span className="text-slate-500">转交时间：</span>{fmtTime(i.ticket_sent_at)}</div>
-        <div><span className="text-slate-500">供应商回复：</span>{fmtTime(i.supplier_replied_at)}</div>
-        <div><span className="text-slate-500">已催办：</span>{i.reminders} 次</div>
+    <motion.li initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }} className="relative flex gap-3 pb-4">
+      {!last && <span className="absolute top-7 bottom-0 left-[13px] w-px bg-line" />}
+      <span className={clsx('relative grid size-[27px] shrink-0 place-items-center rounded-full', toneColor[tone])}><Icon size={13} /></span>
+      <div className="min-w-0 flex-1 pt-0.5">
+        <div className="flex items-center gap-2 text-xs">
+          <span className="font-medium text-fg">{label}</span>
+          {e.actor !== 'agent' && <span className="text-fg-3">{e.actor}</span>}
+          <span className="ml-auto text-fg-3 tabular-nums" title={fmtTime(e.created_at)}>{fmtTime(e.created_at).slice(5)}</span>
+        </div>
+        {long ? (
+          <>
+            <button onClick={() => setOpen(!open)} className="mt-1 flex w-full items-start gap-1 text-left text-[13px] text-fg-2 hover:text-fg">
+              <ChevronRight size={14} className={clsx('mt-0.5 shrink-0 transition-transform duration-200', open && 'rotate-90')} />
+              <span className={clsx(e.kind === 'tool' && 'font-mono text-xs', !open && 'line-clamp-1')}>{head}</span>
+            </button>
+            <AnimatePresence initial={false}>
+              {open && rest.length > 0 && (
+                <motion.pre initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+                  className="mt-1.5 overflow-hidden rounded-lg border border-line bg-panel-2 p-2.5 font-mono text-[11.5px] leading-relaxed whitespace-pre-wrap text-fg-2">
+                  {rest.join('\n')}
+                </motion.pre>
+              )}
+            </AnimatePresence>
+          </>
+        ) : <p className="mt-0.5 text-[13px] whitespace-pre-wrap text-fg-2">{e.text}</p>}
       </div>
-      <div><span className="text-slate-500">排查依据：</span><span className="whitespace-pre-wrap">{i.evidence || '—'}</span></div>
-      {i.supplier_last_reply && <div><span className="text-slate-500">供应商最新回复：</span>{i.supplier_last_reply}</div>}
-      <div>
-        <div className="mb-1 text-slate-500">相关消息</div>
-        <ul className="space-y-1">
-          {msgs.map((m) => (
-            <li key={m.id} className={m.from_us ? 'text-blue-700' : ''}>
-              <span className="text-xs text-slate-400">{fmtTime(m.created_at)} · {groups.get(m.group_id)?.name} · {m.sender}</span>
-              <div className="whitespace-pre-wrap">{m.text}</div>
-            </li>
-          ))}
-        </ul>
-      </div>
-      <ErrorText error={update.error} />
-      <div className="flex gap-2">
-        {i.status !== 'resolved'
-          ? <button className={btn.primary} onClick={() => update.mutate('resolved')}>标记已解决</button>
-          : <button className={btn.plain} onClick={() => update.mutate('investigating')}>重新打开</button>}
-      </div>
+    </motion.li>
+  )
+}
+
+const verdict = (i: Incident) => ({
+  customer: '客户侧问题', us: '我方问题', supplier: '供应商问题', unknown: '证据不足，待确认',
+} as Record<string, string>)[i.responsible] ?? '排查中…'
+
+function Evidence({ text }: { text: string }) {
+  const [open, setOpen] = useState(false)
+  const long = text.length > 160
+  return (
+    <section>
+      <p className={clsx('text-[13.5px] leading-7 whitespace-pre-wrap text-fg-2', long && !open && 'line-clamp-4')}>{text}</p>
+      {long && <button className="mt-1 text-xs text-fg-3 hover:text-accent" onClick={() => setOpen(!open)}>{open ? '收起' : '展开依据'}</button>}
+    </section>
+  )
+}
+
+function Fact({ label, children, mono }: { label: string; children: ReactNode; mono?: boolean }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-[11px] text-fg-3">{label}</dt>
+      <dd className={clsx('mt-0.5 truncate text-[13px] text-fg-2', mono && 'font-mono text-xs')}>{children || '—'}</dd>
     </div>
   )
 }
 
-export default function Incidents() {
-  const { data = [], isLoading, error } = useQuery({ queryKey: ['incidents'], queryFn: () => api<Incident[]>('/incidents') })
-  const { data: groupList = [] } = useQuery({ queryKey: ['groups'], queryFn: () => api<Group[]>('/groups') })
-  const groups = new Map(groupList.map((g) => [g.id, g]))
-  const [open, setOpen] = useState<number | null>(null)
-  const [onlyOpen, setOnlyOpen] = useState(true)
-  const rows = onlyOpen ? data.filter((i) => i.status !== 'resolved') : data
-  if (isLoading) return <Loading />
+function IncidentDrawer({ i, groups, workflows, onClose }: {
+  i: Incident | undefined; groups: Map<number, Group>; workflows: Map<number, Workflow>; onClose: () => void
+}) {
+  const qc = useQueryClient()
+  const [note, setNote] = useState('')
+  const [tab, setTab] = useState<'timeline' | 'messages'>('timeline')
+  const [draft, setDraft] = useState<Partial<Knowledge> | null>(null)
+  const id = i?.id
+  const { data: events = [] } = useQuery({ queryKey: ['events', id], queryFn: () => api<IncidentEvent[]>(`/incidents/${id}/events`), enabled: !!id, refetchInterval: 4000 })
+  const { data: msgs = [] } = useQuery({ queryKey: ['incident-msgs', id], queryFn: () => api<Message[]>(`/incidents/${id}/messages`), enabled: !!id })
+  const update = useMutation({
+    mutationFn: (body: Record<string, unknown>) => patch<Incident>(`/incidents/${id}`, body),
+    onSuccess: (_r, body) => {
+      if (body.status === 'resolved') toast.success('已标记解决', { description: '处理经验可以一键沉淀到知识库', action: { label: '沉淀知识', onClick: () => distill.mutate() } })
+      if (body.note) setNote('')
+    },
+    onError: (e) => toast.error(String(e instanceof Error ? e.message : e)),
+    onSettled: () => { qc.invalidateQueries({ queryKey: ['incidents'] }); qc.invalidateQueries({ queryKey: ['events', id] }) },
+  })
+  const distill = useMutation({
+    mutationFn: () => post<Partial<Knowledge>>(`/incidents/${id}/knowledge-draft`),
+    onSuccess: setDraft,
+    onError: (e) => toast.error(String(e instanceof Error ? e.message : e)),
+  })
+  useHotkeys({ 'drawer:r': () => i && i.status !== 'resolved' && update.mutate({ status: 'resolved' }) }, !!i && !draft)
+
+  if (!i) return <Drawer open={false} onClose={onClose} title=""><span /></Drawer>
+  const [sl, st] = statusLabel[i.status]
   return (
-    <div className="space-y-3">
-      <ErrorText error={error} />
-      <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={onlyOpen} onChange={(e) => setOnlyOpen(e.target.checked)} /> 只看未解决
-      </label>
-      {rows.length === 0 && <Empty>暂无事件</Empty>}
-      {rows.map((i) => {
-        const [rl, rt] = respLabel[i.responsible] ?? [i.responsible || '—', 'slate']
-        const [sl, st] = statusLabel[i.status]
-        const overdue = i.status === 'waiting_supplier' && i.ticket_sent_at && !i.supplier_replied_at && i.reminders > 0
-        return (
-          <div key={i.id} className="overflow-hidden rounded-lg border bg-white">
-            <button className="flex w-full flex-wrap items-center gap-2 p-3 text-left text-sm" onClick={() => setOpen(open === i.id ? null : i.id)}>
-              <span className="text-slate-400">#{i.id}</span>
-              <span className="font-medium">{groups.get(i.group_id)?.name}</span>
-              <Badge>{catLabel[i.category] ?? i.category}</Badge>
-              <Badge tone={rt}>{rl}</Badge>
-              <Badge tone={st}>{sl}</Badge>
-              {overdue && <Badge tone="red">供应商未回复</Badge>}
-              {i.related_messages > 1 && <span className="text-xs text-slate-500">合并 {i.related_messages} 条</span>}
-              <span className="text-xs text-slate-500">置信度 {i.confidence}</span>
-              <span className="w-full truncate text-slate-600 sm:ml-auto sm:w-auto sm:max-w-md">{i.summary}</span>
-            </button>
-            {open === i.id && <Detail i={i} groups={groups} />}
+    <>
+      <Drawer open onClose={onClose} width={620}
+        title={<span className="flex items-center gap-2"><span className="text-fg-3">#{i.id}</span>{i.summary || '事件'}</span>}
+        subtitle={<span className="flex flex-wrap items-center gap-1.5">
+          <Badge tone={st} dot>{sl}</Badge>
+          {i.workflow_id && <Badge tone="violet">链路 · {workflows.get(i.workflow_id)?.name}</Badge>}
+          <span>{groups.get(i.group_id)?.name} · {categoryLabel[i.category] ?? i.category} · {ago(i.created_at)}</span>
+        </span>}
+        footer={<>
+          {i.status !== 'resolved'
+            ? <Button variant="primary" icon={<Check size={14} />} onClick={() => update.mutate({ status: 'resolved' })} kbd="R">标记已解决</Button>
+            : <Button icon={<RotateCcw size={14} />} onClick={() => update.mutate({ status: 'investigating' })}>重新打开</Button>}
+          <Button icon={<BookPlus size={14} />} disabled={distill.isPending} onClick={() => distill.mutate()}>
+            {distill.isPending ? '正在总结…' : '沉淀为知识'}
+          </Button>
+        </>}>
+        <div className="space-y-6">
+          {/* 第一层：结论 —— 一眼知道是谁的问题、有多大把握 */}
+          <div className="flex items-center gap-4">
+            <ScoreRing score={i.confidence} size={52} />
+            <div className="min-w-0">
+              <div className="text-[11px] tracking-wide text-fg-3">AGENT 判断</div>
+              <div className="mt-0.5 text-[17px] font-semibold tracking-tight">{verdict(i)}</div>
+            </div>
           </div>
-        )
-      })}
+          {/* 第二层：依据（默认折叠到 4 行） */}
+          {i.evidence && <Evidence text={i.evidence} />}
+          {/* 第三层：事实，弱化展示 */}
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 rounded-xl bg-panel-2/60 px-4 py-3.5 sm:grid-cols-3">
+            <Fact label="request_id" mono>{i.request_id}</Fact>
+            <Fact label="模型">{i.model}</Fact>
+            <Fact label="供应商群">{i.supplier_group_id ? groups.get(i.supplier_group_id)?.name : ''}</Fact>
+            <Fact label="转交时间">{i.ticket_sent_at && fmtTime(i.ticket_sent_at).slice(5)}</Fact>
+            <Fact label="供应商回复">{i.supplier_replied_at && fmtTime(i.supplier_replied_at).slice(5)}</Fact>
+            <Fact label="催办 / 合并">{`${i.reminders} 次 / ${i.related_messages} 条`}</Fact>
+          </dl>
+          <Segmented value={tab} onChange={setTab} options={[
+            { value: 'timeline', label: <>处理过程 <span className="text-fg-3 tabular-nums">{events.length}</span></> },
+            { value: 'messages', label: <>相关消息 <span className="text-fg-3 tabular-nums">{msgs.length}</span></> },
+          ]} />
+          {tab === 'timeline' ? (
+            <ol>{events.map((e, n) => <TimelineItem key={e.id} e={e} last={n === events.length - 1} />)}</ol>
+          ) : (
+            <ul className="space-y-2.5">
+              {msgs.map((m) => (
+                <li key={m.id} className={clsx('flex', m.from_us && 'justify-end')}>
+                  <div className={clsx('max-w-[85%] rounded-2xl px-3 py-2 text-[13px]', m.from_us ? 'rounded-br-md bg-accent text-accent-fg' : 'rounded-bl-md bg-panel-2')}>
+                    <div className={clsx('mb-0.5 text-[11px]', m.from_us ? 'text-white/70' : 'text-fg-3')}>{groups.get(m.group_id)?.name} · {m.sender} · {fmtTime(m.created_at).slice(5)}</div>
+                    <div className="whitespace-pre-wrap">{m.text}</div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); if (note.trim()) update.mutate({ note }) }}>
+            <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="添加备注，记入处理过程…" />
+            <Button type="submit" disabled={!note.trim()}>记录</Button>
+          </form>
+        </div>
+      </Drawer>
+      <KnowledgeEditor value={draft} onClose={() => setDraft(null)} />
+    </>
+  )
+}
+
+type Filter = 'active' | 'waiting_supplier' | 'resolved' | 'all'
+
+export default function Incidents() {
+  const now = useNow(15000)
+  const [params, setParams] = useSearchParams()
+  const [filter, setFilter] = useState<Filter>('active')
+  const { data = [], isLoading } = useQuery({ queryKey: ['incidents'], queryFn: () => api<Incident[]>('/incidents') })
+  const { data: groupList = [] } = useQuery({ queryKey: ['groups'], queryFn: () => api<Group[]>('/groups') })
+  const { data: wfList = [] } = useQuery({ queryKey: ['workflows'], queryFn: () => api<Workflow[]>('/workflows') })
+  const groups = new Map(groupList.map((g) => [g.id, g]))
+  const workflows = new Map(wfList.map((w) => [w.id, w]))
+  const rows = data.filter((i) => filter === 'all' ? true : filter === 'active' ? i.status !== 'resolved' : i.status === filter)
+  const openId = Number(params.get('open')) || null
+  const setOpen = (id: number | null) => setParams(id ? { open: String(id) } : {}, { replace: true })
+  const { sel, setSel, current, move } = useListNav(rows)
+  useHotkeys({
+    j: () => move(1), k: () => move(-1), arrowdown: () => move(1), arrowup: () => move(-1),
+    enter: () => current && setOpen(current.id),
+  }, !openId)
+
+  const count = (f: Filter) => data.filter((i) => f === 'all' || (f === 'active' ? i.status !== 'resolved' : i.status === f)).length
+  return (
+    <div>
+      <PageHeader title="事件中心" desc="每个客户问题从反馈、排查、转交到解决的完整记录。">
+        <Segmented value={filter} onChange={setFilter} options={[
+          { value: 'active', label: <>进行中 <span className="text-fg-3 tabular-nums">{count('active')}</span></> },
+          { value: 'waiting_supplier', label: '等供应商' },
+          { value: 'resolved', label: '已解决' },
+          { value: 'all', label: '全部' },
+        ]} />
+      </PageHeader>
+      {isLoading ? <Skeleton /> : rows.length === 0 ? <Empty icon={<Zap size={18} />} title="暂无事件">客户在群里反馈问题后，Agent 会自动建立事件并开始排查。</Empty> : (
+        <Card className="divide-y divide-line overflow-hidden">
+          <AnimatePresence initial={false}>
+            {rows.map((i) => {
+              const [rl, rt] = respLabel[i.responsible] ?? [i.responsible || '—', 'slate']
+              const [sl, st] = statusLabel[i.status]
+              const overdue = i.status === 'waiting_supplier' && !i.supplier_replied_at && i.reminders > 0
+              return (
+                <motion.button layout {...listItem} key={i.id} data-row={i.id}
+                  onClick={() => { setSel(i.id); setOpen(i.id) }}
+                  className={clsx('flex w-full items-center gap-4 px-5 py-4 text-left transition-colors',
+                    sel === i.id ? 'bg-accent-soft/60' : 'hover:bg-panel-2')}>
+                  <ScoreRing score={i.confidence} size={30} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-fg-3 tabular-nums">#{i.id}</span>
+                      <span className="truncate text-[13.5px] font-medium">{i.summary || '—'}</span>
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-fg-3">
+                      <span>{groups.get(i.group_id)?.name}</span>
+                      <span>·</span><span>{categoryLabel[i.category] ?? i.category}</span>
+                      {i.model && <><span>·</span><span>{i.model}</span></>}
+                      <Badge tone={rt} className="ml-1">{rl}</Badge>
+                      {overdue && <Badge tone="bad">供应商未回复</Badge>}
+                      {i.related_messages > 1 && <span>合并 {i.related_messages} 条</span>}
+                    </div>
+                  </div>
+                  <div className="hidden shrink-0 flex-col items-end gap-1 sm:flex">
+                    <Badge tone={st} dot>{sl}</Badge>
+                    <span className="text-[11px] text-fg-3">{ago(i.created_at, now)}</span>
+                  </div>
+                  <ChevronRight size={15} className="shrink-0 text-fg-3" />
+                </motion.button>
+              )
+            })}
+          </AnimatePresence>
+        </Card>
+      )}
+      {rows.length > 0 && <p className="mt-3 text-xs text-fg-3"><Kbd>J</Kbd><Kbd>K</Kbd> 选择 · <Kbd>↵</Kbd> 打开 · 详情里 <Kbd>R</Kbd> 标记解决</p>}
+      <IncidentDrawer i={data.find((x) => x.id === openId)} groups={groups} workflows={workflows} onClose={() => setOpen(null)} />
     </div>
   )
 }
