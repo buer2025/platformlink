@@ -39,7 +39,8 @@ def _client() -> anthropic.AsyncAnthropic | None:
     if not key:
         return None
     if key not in _clients:
-        _clients[key] = anthropic.AsyncAnthropic(api_key=key)
+        _clients[key] = anthropic.AsyncAnthropic(
+            api_key=key, base_url=settings.anthropic_base_url or None)
     return _clients[key]
 
 

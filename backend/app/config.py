@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-opus-5-5"
     # 为空时 Agent 使用规则兜底（便于本地开发和测试）
     anthropic_api_key: str = ""
+    # 中转 / 代理地址；为空时使用官方 API
+    anthropic_base_url: str = ""
 
     # 后台登录口令（必须配置；为空时拒绝所有后台请求）
     admin_token: str = ""
