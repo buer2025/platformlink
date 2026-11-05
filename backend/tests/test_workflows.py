@@ -671,3 +671,38 @@ async def test_feishu_encrypted_webhook(client, monkeypatch):  # noqa: F811
     bad = _feishu_encrypt({"type": "url_verification", "token": "wrong", "challenge": "c1"}, "k3y")
     assert (await client.post("/api/webhooks/feishu", json={"encrypt": bad})).status_code == 403
     assert (await client.post("/api/webhooks/feishu", json={"encrypt": "garbage"})).status_code == 400
+
+
+async def test_sla_alerts(client, fake, monkeypatch):  # noqa: F811
+    """客户等待超过阈值 → 内部群提醒被指派人 + 负责人；同一条消息只提醒一次；工作时间判断。"""
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import update
+
+    from app.config import settings
+    from app.db import SessionLocal
+    from app.models import Message
+    from app.services import presend, sla
+    cid, _ = await setup_groups(client)
+    await client.patch(f"/api/groups/{cid}", json={"owner": "zhang", "sla_minutes": 5})
+    await client.post("/api/simulate", json={"chat_id": "900", "chat_name": "内部群", "text": "hi"})
+    g = next(x for x in (await client.get("/api/groups")).json() if x["external_id"] == "900")
+    await client.patch(f"/api/groups/{g['id']}", json={"kind": "internal"})
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 211, "seedance 报错了"))
+    work_hours = sla.in_work_hours
+    monkeypatch.setattr(sla, "in_work_hours", lambda now=None: True)
+    async with SessionLocal() as s:
+        assert await sla.check_sla(s) == 0  # 刚发，没超时
+        await s.execute(update(Message).values(created_at=presend.utcnow() - timedelta(minutes=6)))
+        await s.commit()
+        assert await sla.check_sla(s) == 1
+        assert await sla.check_sla(s) == 0  # 同一条不重复提醒
+    alert = next(o for o in await outbound(client) if o["group_id"] == g["id"] and "等待" in o["text"])
+    assert "zhang" in alert["mentions"] and alert["status"] == "pending"
+
+    # 工作时间判断（北京时间）
+    monkeypatch.setattr(settings, "work_hours", "09:00-21:00")
+    monkeypatch.setattr(settings, "work_days", [1, 2, 3, 4, 5])
+    assert work_hours(datetime(2026, 11, 5, 3, 0, tzinfo=UTC))  # 周四 11:00 北京
+    assert not work_hours(datetime(2026, 11, 5, 14, 0, tzinfo=UTC))  # 周四 22:00
+    assert not work_hours(datetime(2026, 11, 7, 3, 0, tzinfo=UTC))  # 周六

@@ -12,6 +12,7 @@ export type Group = {
   style: Record<string, unknown>
   automation: 'auto' | 'confirm' | 'observe'
   extra_delay_seconds: number
+  sla_minutes: number
   owner: string
   backup_owner: string
   tags: string[]

@@ -20,6 +20,7 @@ class GroupOut(BaseModel):
     style: dict
     automation: AutomationMode
     extra_delay_seconds: int
+    sla_minutes: int
     owner: str
     backup_owner: str
     tags: list[str]
@@ -38,6 +39,7 @@ class GroupUpdate(BaseModel):
     style: dict | None = None
     automation: AutomationMode | None = None
     extra_delay_seconds: int | None = None
+    sla_minutes: int | None = None
     owner: str | None = None
     backup_owner: str | None = None
     tags: list[str] | None = None

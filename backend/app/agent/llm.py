@@ -110,7 +110,7 @@ BASE_INVESTIGATE = (
     "customer（参数错误、余额不足、key 失效、内容审核等）、us（我方网关/配置问题）、"
     "supplier（上游渠道报错、限流、超时）。日志里的 channel_id 是上游渠道。"
     "证据不足时 responsible=unknown，并在给客户的回复里礼貌索要 request_id。"
-    "回复要像真人技术支持，简短自然，不要暴露内部渠道编号和供应商名称。"
+    "回复要像真人技术支持，简短自然，不要出现「渠道」二字、渠道编号和供应商名称，需要时说「上游服务」。"
 )
 
 
@@ -175,7 +175,7 @@ async def integrate(draft: str, conversation: str, context: str) -> str:
 class FollowupDecision(BaseModel):
     should_reply: bool = Field(description="这条消息是否需要我们回复")
     problem_persists: bool = Field(description="仅当客户这条消息本身明确说问题还在 / 又出现 / 没解决时为 true；"
-                                               "「好的」「收到」、表情、致谢一律为 false（不看事件本身是否已解决）")
+                                               "「好的」「收到」、表情、致谢、询问进度或预计时间（如「多久能好」）一律为 false")
     reason: str = Field(description="一句话说明判断理由")
     text: str = Field(description="回复内容；不需要回复时为空")
 

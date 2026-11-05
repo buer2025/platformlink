@@ -161,7 +161,7 @@ function Editor({ g, onClose }: { g: Group | undefined; onClose: () => void }) {
     setF({
       name: g.name, kind: g.kind, automation: g.automation, level: g.level, models: g.models, contacts: g.contacts,
       tags: g.tags, api_users: g.api_users, bot_webhook: g.bot_webhook ?? '', channel_ids: g.channel_ids.map(String),
-      owner: g.owner, backup_owner: g.backup_owner, extra_delay_seconds: String(g.extra_delay_seconds),
+      owner: g.owner, backup_owner: g.backup_owner, extra_delay_seconds: String(g.extra_delay_seconds), sla_minutes: String(g.sla_minutes ?? 0),
       address: str(st.address), tone: str(st.tone), summary: str(st.summary), phrases: list(st.phrases), taboos: list(st.taboos),
       particles: list(st.particles), emoji: list(st.emoji), samples: lines(st.samples),
     })
@@ -186,7 +186,8 @@ function Editor({ g, onClose }: { g: Group | undefined; onClose: () => void }) {
         models: f.models, contacts: f.contacts, tags: f.tags, api_users: f.api_users, bot_webhook: f.bot_webhook.trim(),
         channel_ids: (f.channel_ids as string[]).map(Number).filter((n) => Number.isInteger(n) && n > 0),
         owner: f.owner.trim(), backup_owner: f.backup_owner.trim(),
-        extra_delay_seconds: Math.max(0, parseInt(f.extra_delay_seconds) || 0), style,
+        extra_delay_seconds: Math.max(0, parseInt(f.extra_delay_seconds) || 0),
+        sla_minutes: Math.max(0, parseInt(f.sla_minutes) || 0), style,
       })
     },
     onSuccess: (r) => { toast.success(`已保存「${r.name}」`); onClose() },
@@ -208,6 +209,7 @@ function Editor({ g, onClose }: { g: Group | undefined; onClose: () => void }) {
             <Field label="自动化" hint="只观察：Agent 不发言"><Select value={f.automation} onChange={ev('automation')}>
               {Object.entries(autoLabel).map(([k, [v]]) => <option key={k} value={k}>{v}</option>)}</Select></Field>
             <Field label="额外倒计时（秒）" hint="VIP 群可加长"><Input inputMode="numeric" value={f.extra_delay_seconds} onChange={ev('extra_delay_seconds')} /></Field>
+            <Field label="等待提醒（分钟）" hint="客户等这么久没人回就提醒负责人，0 = 默认 15"><Input inputMode="numeric" value={f.sla_minutes} onChange={ev('sla_minutes')} /></Field>
           </Section>
           {g!.platform === 'wecom' && (
             <Section title="企业微信发送" desc="企业微信用「群机器人」发消息：群设置 → 添加群机器人 → 复制 Webhook 地址。群机器人只能加到内部群；外部客户群企业微信不允许机器人发消息，请把自动化设为「需人工确认」，由同事复制 AI 草稿发送。">

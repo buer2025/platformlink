@@ -100,6 +100,8 @@ class Group(Base):
         Enum(AutomationMode), default=AutomationMode.auto
     )
     extra_delay_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    # 客户等待超过多少分钟提醒（0 = 用全局默认）；VIP 群可以设得更短
+    sla_minutes: Mapped[int] = mapped_column(Integer, default=0)
     owner: Mapped[str] = mapped_column(String(100), default="")
     backup_owner: Mapped[str] = mapped_column(String(100), default="")
     # 自由标识，例如 ["VIP", "视频", "海外"]；链路可按标识限定适用的群
@@ -205,6 +207,8 @@ class Incident(Base):
     human_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     human_by: Mapped[str] = mapped_column(String(100), default="")
     assignee_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    # 已为哪条客户消息发过超时提醒（避免同一条反复提醒）
+    sla_alerted_message_id: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 

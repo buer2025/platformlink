@@ -50,6 +50,7 @@ const eventMeta: Record<string, [string, LucideIcon, Tone]> = {
   auto_closed: ['自动关闭', Timer, 'slate'],
   memory_saved: ['沉淀记忆', Lightbulb, 'ok'],
   human_takeover: ['人工接管', Pencil, 'info'],
+  sla: ['等待超时', Timer, 'bad'],
   assigned: ['指派', UserRound, 'accent' as Tone],
   approved: ['确认发送', Check, 'ok'],
   error: ['处理出错', CircleAlert, 'bad'],

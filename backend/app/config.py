@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     escalate_after_followups: int = 2
     # 我方同事在群里亲自回复后，AI 暂停自动发送多久（分钟）
     human_takeover_minutes: int = 30
+    # SLA：客户等待超过多少分钟提醒负责人；工作时间外阈值放宽到 sla_off_hours_minutes
+    sla_minutes: int = 15
+    sla_off_hours_minutes: int = 60
+    # 工作时间（北京时间），如 09:00-21:00；工作日 1=周一 … 7=周日
+    work_hours: str = "09:00-21:00"
+    work_days: list[int] = [1, 2, 3, 4, 5, 6, 7]
+    timezone: str = "Asia/Shanghai"
     # 供应商转交单无回复多久后催办，最多催几次
     supplier_remind_minutes: int = 30
     supplier_max_reminders: int = 2

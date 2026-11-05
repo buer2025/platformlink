@@ -64,6 +64,16 @@ LOG_DATABASE_URL=mysql+aiomysql://readonly:密码@host:3306/new-api   # 只读�
 
 读取 `logs` 与 `channels` 表（启动后反射表结构，兼容有无 `request_id` 列的版本）。在「群与标记」里：客户群填 new-api **用户名/用户 ID**，供应商群填**渠道 ID**——日志定位到哪个渠道出错，就精确转交到哪个供应商群。群详情里可「测试查询」验证绑定。
 
+## Agent 评估集
+
+改提示词 / 换模型前后各跑一次，看准确率有没有退步（需要 `ANTHROPIC_API_KEY`）：
+
+```bash
+cd backend && uv run python -m evals.run
+```
+
+覆盖分诊、责任方判断（基于 new-api 模拟日志）、证据不足封顶、不泄露内部信息、跟进时该不该回、风格禁忌与克制。用例在 `backend/evals/cases.py`，遇到判断错的真实案例就补一条进去。
+
 ## 键盘操作
 
 `⌘K` 命令面板 · `G` 然后 `P/I/W/K/G/S` 切换页面 · `J/K` 上下 · `↵` 打开 · `⌘↵` 发送/保存 · `E` 修改 · `R` 标记解决 · `C` 新建 · `⇧T` 主题 · `?` 全部快捷键

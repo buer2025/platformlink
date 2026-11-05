@@ -15,6 +15,7 @@ from app.db import SessionLocal, run_migrations
 from app.services.memory import close_idle
 from app.services.presend import flush_due, recover_stuck, remind_suppliers
 from app.services.seed import seed_defaults
+from app.services.sla import check_sla
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("platformlink")
@@ -23,6 +24,7 @@ STATIC = Path(__file__).resolve().parent.parent / "static"
 
 async def scheduler() -> None:
     last_close = 0.0
+    last_sla = 0.0
     while True:
         try:
             async with SessionLocal() as s:
@@ -31,6 +33,9 @@ async def scheduler() -> None:
                 if time.monotonic() - last_close > 300:  # 每 5 分钟检查一次空闲会话
                     last_close = time.monotonic()
                     await close_idle(s)
+                if time.monotonic() - last_sla > 60:  # 每分钟检查一次超时未回复
+                    last_sla = time.monotonic()
+                    await check_sla(s)
         except Exception:
             log.exception("presend scheduler failed")
         await asyncio.sleep(settings.scheduler_interval_seconds)
