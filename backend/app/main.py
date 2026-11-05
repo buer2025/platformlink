@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.routes import admin, public
 from app.config import settings
 from app.db import SessionLocal, run_migrations
+from app.services import lease
 from app.services.memory import close_idle
 from app.services.presend import flush_due, recover_stuck, remind_suppliers
 from app.services.quota import auto_push
@@ -24,11 +25,23 @@ STATIC = Path(__file__).resolve().parent.parent / "static"
 
 
 async def scheduler() -> None:
+    """后台定时任务。多进程 / 多副本时只有拿到 "scheduler" 租约的那个进程执行，
+    其他进程空转待命；持有者挂掉后租约过期，下一个进程自动接手。"""
     last_close = 0.0
     last_sla = 0.0
+    ttl = max(30.0, settings.scheduler_interval_seconds * 6)
+    leader = False
     while True:
         try:
+            is_leader = await lease.acquire("scheduler", ttl)
+            if is_leader != leader:
+                leader = is_leader
+                log.info("scheduler %s (%s)", "接管" if leader else "待命", lease.HOLDER)
+            if not leader:
+                await asyncio.sleep(settings.scheduler_interval_seconds)
+                continue
             async with SessionLocal() as s:
+                await recover_stuck(s)
                 await remind_suppliers(s)
                 await flush_due(s)
                 if time.monotonic() - last_close > 300:  # 每 5 分钟检查一次空闲会话
@@ -49,7 +62,6 @@ async def lifespan(_: FastAPI):
         log.warning("ADMIN_TOKEN 未配置，后台接口将拒绝所有请求")
     await asyncio.to_thread(run_migrations)
     async with SessionLocal() as s:
-        await recover_stuck(s)
         await seed_defaults(s)
     tasks = [asyncio.create_task(scheduler())]
     if settings.telegram_mode == "polling" and settings.telegram_bot_token:

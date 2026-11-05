@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Group, Incident, IncidentStatus, Message, Outbound, OutboundStatus
 from app.services.presend import aware, utcnow
 
-TO_CUSTOMER = ("ack", "customer_reply", "manual", "escalation")
+TO_CUSTOMER = ("ack", "customer_reply", "manual", "escalation", "greeting", "chat")
 
 
 def _mins(a, b) -> float:

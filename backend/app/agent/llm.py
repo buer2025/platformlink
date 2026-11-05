@@ -16,6 +16,10 @@ class Classification(BaseModel):
     request_id: str = Field(description="消息中的 request_id，没有为空")
     summary: str = Field(description="一句话概括问题")
     confidence: int = Field(description="0-100")
+    reply_kind: str = Field(description=(
+        "仅当 is_issue=false 时有意义：greeting（客户在招呼/呼叫我方，如「在吗」「有人吗」「@技术支持」）"
+        "| question（向我方的一般咨询，如「你们支持 xx 模型吗」「怎么开发票」）"
+        "| none（闲聊、玩笑、表情、致谢、群里其他人之间的对话，不需要我们开口）"))
 
 
 class Finding(BaseModel):
@@ -24,7 +28,8 @@ class Finding(BaseModel):
     confidence: int = Field(description="0-100，证据越充分越高；没有日志证据时不应超过 60")
     customer_reply: str = Field(description="给客户的回复草稿")
     supplier_note: str = Field(description="若是供应商问题，发给供应商的描述，否则为空")
-    self_check: str = Field(default="", description="反思：这个结论最可能错在哪里，为什么仍这样判断")
+    # 不给默认值：结构化输出里带默认值的字段模型常常直接省略，反思就形同虚设
+    self_check: str = Field(description="反思：这个结论最可能错在哪里，为什么仍这样判断")
 
 
 class KnowledgeDraft(BaseModel):
@@ -78,6 +83,10 @@ async def _parse[T: BaseModel](system: str, user: str, schema: type[T], effort: 
 REQ_ID = re.compile(r"(?:request[_ ]?id|req[_-]?id)\s*[:：=]?\s*([\w-]{6,})", re.IGNORECASE)
 
 
+GREETING = re.compile(r"^(?:@\S+\s*)*(?:在吗|在不在|有人吗|有人在吗|hello|hi|你好|您好)[\s?？。!！~～]*$",
+                      re.IGNORECASE)
+
+
 def _rule_classify(text: str) -> Classification:
     low = text.lower()
     rid = (m.group(1) if (m := REQ_ID.search(text)) else "")
@@ -88,16 +97,20 @@ def _rule_classify(text: str) -> Classification:
     elif any(k in low for k in ("报错", "error", "失败", "500", "502", "503", "超时", "timeout")):
         cat = "error"
     else:
+        kind = "greeting" if GREETING.match(text.strip()) else "none"
         return Classification(is_issue=False, category="other", model="", request_id=rid,
-                              summary="", confidence=50)
+                              summary="", confidence=50, reply_kind=kind)
     model = (m.group(0) if (m := re.search(r"seedance[\w.-]*", low)) else "")
     return Classification(is_issue=True, category=cat, model=model, request_id=rid,
-                          summary=text[:80], confidence=60)
+                          summary=text[:80], confidence=60, reply_kind="none")
 
 
 async def classify(text: str) -> Classification:
     result = await _parse(
-        "你是模型 API 聚合平台的技术支持分诊员。判断客户群里这条消息是否需要处理（故障反馈或用量需求）并抽取字段。",
+        "你是模型 API 聚合平台的技术支持分诊员。判断客户群里这条消息是否需要处理（故障反馈或用量需求）并抽取字段。"
+        "is_issue=false 时必须认真填 reply_kind：客户叫我们（在吗/有人吗/@我方）→ greeting；"
+        "向我方提一般性问题（支持哪些模型、怎么开票、价格、怎么接入等）→ question；"
+        "闲聊、表情、致谢、群里其他人之间说话 → none。",
         text,
         Classification,
         effort="low",
@@ -134,14 +147,16 @@ async def investigate(c: Classification, evidence: str, instructions: str = "",
     if c.category == "usage_request":
         return Finding(responsible="supplier", evidence=evidence, confidence=50,
                        customer_reply="收到，用量需求我们这边登记一下，和上游确认好额度后同步您～",
-                       supplier_note=f"{c.model or '模型'} 这边客户有加量需求，麻烦看下能否扩一下")
+                       supplier_note=f"{c.model or '模型'} 这边客户有加量需求，麻烦看下能否扩一下",
+                       self_check="AI 不可用，规则兜底")
     if c.category == "rate_limit":
         return Finding(responsible="supplier", evidence="客户反馈 429", confidence=55,
                        customer_reply="收到，429 的情况我们正在协调上游扩容，有进展第一时间同步～",
-                       supplier_note=f"{c.model or '模型'} 这边客户 429 比较多，麻烦看下能否扩一下量")
+                       supplier_note=f"{c.model or '模型'} 这边客户 429 比较多，麻烦看下能否扩一下量",
+                       self_check="AI 不可用，规则兜底")
     return Finding(responsible="unknown", evidence=evidence, confidence=40,
                    customer_reply="收到，方便提供一下报错的 request_id 吗？我们马上排查",
-                   supplier_note="")
+                   supplier_note="", self_check="AI 不可用，规则兜底")
 
 
 async def distill(timeline: str) -> KnowledgeDraft | None:
@@ -274,6 +289,20 @@ async def summarize_memory(transcript: str) -> str:
         "「seedance 上游 429，已协调扩容；客户做直播，很在意恢复时间」。只写记录里出现过的事实，60 字以内。",
         transcript, Memory, effort="low")
     return r.text.strip() if r else ""
+
+
+async def summarize_conversation(previous: str, transcript: str) -> str:
+    """把一段较早的客户对话压缩成摘要（增量：在已有摘要基础上合并新的一段）。"""
+    r = await _parse(
+        "你在帮技术支持压缩一段很长的客户群聊，后面的排查和回复只会看到这份摘要加最近几条原话。"
+        "把「已有摘要」和「新的一段对话」合并成一份新摘要：\n"
+        "- 必须原样保留所有 request_id、模型名、报错码、时间点、数量等硬信息\n"
+        "- 写清客户提过哪些问题、各自的进展，客户的情绪和明确提出的要求\n"
+        "- 删掉寒暄和重复内容，不要编造，不要给建议\n"
+        "- 分条列出，400 字以内",
+        f"已有摘要:\n{previous or '（无）'}\n\n新的一段对话:\n{transcript}",
+        Rewrite, effort="low")
+    return r.text.strip() if r and r.text.strip() else ""
 
 
 COMPOSE = """你是我方技术支持，在 IM 群里亲自打字回复。根据「要表达的意思」和「上下文」写一条消息。

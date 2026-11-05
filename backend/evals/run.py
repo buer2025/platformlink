@@ -84,6 +84,11 @@ async def main() -> int:
                     leak = any(w in f.customer_reply for w in ("渠道", "channel", "上游B", "上游C"))
                     check("不泄露内部信息", msg, not leak, f.customer_reply[:80])
 
+        for msg, kind in cases.REPLY_KIND:
+            c = await llm.classify(msg)
+            check("开口判断", msg, not c.is_issue and c.reply_kind == kind,
+                  f"is_issue={c.is_issue} reply_kind={c.reply_kind}")
+
         for msg in cases.LOW_CONFIDENCE:
             _, f = await investigate(s, g, msg)
             check("证据不足封顶", msg, f is not None and f.confidence < 70, f"准确率 {f and f.confidence}")
@@ -92,8 +97,19 @@ async def main() -> int:
         for msg, resolved, reply, persists in cases.FOLLOWUP:
             ctx = "状态: 已解决" if resolved else "状态: 已转交上游供应商，等待处理\n供应商回复: 暂未回复"
             d = await llm.followup(conv, msg, ctx, resolved=resolved)
-            check("跟进判断", msg, d.should_reply == reply and d.problem_persists == persists,
+            check("跟进判断", msg,
+                  d.should_reply == reply and (persists is None or d.problem_persists == persists),
                   f"回复={d.should_reply} 仍在={d.problem_persists} {d.reason}")
+
+        for quoted, msg, reply, persists in cases.QUOTE:
+            d = await llm.followup(conv, msg, "状态: 已转交上游供应商，等待处理", quoted=quoted)
+            check("引用判断", f"{msg}（引用「{quoted}」）",
+                  d.should_reply == reply and d.problem_persists == persists,
+                  f"回复={d.should_reply} 仍在={d.problem_persists} {d.reason}")
+
+        summary = await llm.summarize_conversation("", cases.COMPRESS)
+        lost = [w for w in cases.COMPRESS_MUST_KEEP if w not in summary]
+        check("对话压缩不丢硬信息", "王总长对话", not lost, f"丢失 {lost}")
 
         for t in cases.STYLE_TEXTS:
             out = await llm.stylize(t, cases.STYLE, "customer_reply")

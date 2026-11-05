@@ -56,6 +56,7 @@ const eventMeta: Record<string, [string, LucideIcon, Tone]> = {
   approved: ['确认发送', Check, 'ok'],
   error: ['处理出错', CircleAlert, 'bad'],
   note: ['备注', NotebookPen, 'slate'],
+  compressed: ['压缩对话', GitMerge, 'slate'],
   knowledge_saved: ['沉淀知识', BookPlus, 'ok'],
 }
 

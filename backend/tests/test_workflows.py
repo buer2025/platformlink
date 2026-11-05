@@ -222,7 +222,7 @@ async def test_agent_caps_unsupported_confidence(client, fake, monkeypatch):  # 
 
 async def _cls():
     from app.agent.llm import Classification
-    return Classification(is_issue=True, category="error", model="seedance", request_id="",
+    return Classification(is_issue=True, category="error", model="seedance", request_id="", reply_kind="none",
                           summary="seedance 报错", confidence=90)
 
 

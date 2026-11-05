@@ -209,6 +209,9 @@ class Incident(Base):
     assignee_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
     # 已为哪条客户消息发过超时提醒（避免同一条反复提醒）
     sla_alerted_message_id: Mapped[int | None] = mapped_column(Integer)
+    # 长对话压缩：较早的客户消息压成摘要，conv_summary_upto 之前（含）的消息已并入摘要
+    conv_summary: Mapped[str] = mapped_column(Text, default="")
+    conv_summary_upto: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
@@ -242,6 +245,7 @@ class Outbound(Base):
     # 怎么发出去的：auto（倒计时自动）/ approved（人工点发送）/ manual（人工撰写）
     sent_by: Mapped[str] = mapped_column(String(20), default="")
     error: Mapped[str] = mapped_column(Text, default="")
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -276,3 +280,12 @@ class GroupMemory(Base):
     incident_id: Mapped[int | None] = mapped_column(ForeignKey("incidents.id"))
     text: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Lease(Base):
+    """跨进程的租约锁：调度器、Telegram 轮询、同群消息处理都靠它保证同一时刻只有一个持有者。"""
+
+    __tablename__ = "leases"
+    name: Mapped[str] = mapped_column(String(200), primary_key=True)
+    holder: Mapped[str] = mapped_column(String(100), default="")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

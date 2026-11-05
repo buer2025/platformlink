@@ -12,6 +12,7 @@ import { Avatar, Badge, Button, Card, Empty, Kbd, listItem, PageHeader, ScoreRin
 export const purposeLabel: Record<string, string> = {
   ack: '安抚回复', customer_reply: '客户回复', supplier_ticket: '供应商转交',
   supplier_remind: '供应商催办', quota_push: '催量', escalation: '升级人工', manual: '人工消息',
+  greeting: '招呼回应', chat: '咨询回复',
 }
 const statusInfo: Record<Outbound['status'], [string, Tone]> = {
   pending: ['倒计时', 'info'], needs_approval: ['待确认', 'warn'], sending: ['发送中', 'info'],

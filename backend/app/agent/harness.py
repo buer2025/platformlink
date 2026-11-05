@@ -267,7 +267,7 @@ async def run(ctx: Ctx, instructions: str = "", preloaded: str = "") -> llm.Find
         for u in uses:
             if u.name == "submit_finding":
                 try:
-                    ctx.finding = llm.Finding.model_validate(u.input)
+                    ctx.finding = llm.Finding.model_validate({"self_check": "", **u.input})
                 except ValidationError as e:
                     results.append({"type": "tool_result", "tool_use_id": u.id, "is_error": True,
                                     "content": f"参数不合法：{e.errors()[:3]}"})

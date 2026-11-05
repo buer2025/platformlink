@@ -26,7 +26,7 @@ from app.models import (
     Staff,
     Workflow,
 )
-from app.services import knowledge, memory, presend
+from app.services import knowledge, lease, memory, presend
 from app.services.assign import auto_assign
 from app.services.escalation import escalate
 from app.services.events import record
@@ -149,15 +149,55 @@ async def _mergeable(session: AsyncSession, group: Group, category: str) -> Inci
     return next((i for i in rows if presend.aware(i.created_at) >= since), None)
 
 
+KEEP_RECENT = 12  # 最近这么多条客户原话始终逐字保留
+COMPRESS_OVER = 24  # 超过这么多条（或 COMPRESS_CHARS 字）开始压缩更早的部分
+COMPRESS_CHARS = 6000
+RESUMMARIZE_EVERY = 10  # 摘要之后又攒了这么多条旧消息才重新压缩，避免每条消息都调一次模型
+
+
+def _line(m: Message) -> str:
+    return f"[{m.created_at:%m-%d %H:%M}] {m.sender}: {m.text}"
+
+
 async def _conversation(session: AsyncSession, incident: Incident) -> tuple[str, str, int]:
-    """该事件下客户的全部消息：(按时间拼好的文本, 最新一条的平台消息 ID, 最大本地 ID)。"""
+    """该事件下客户的全部消息：(按时间拼好的文本, 最新一条的平台消息 ID, 最大本地 ID)。
+
+    对话过长时把较早的部分压成摘要（存在事件上增量更新），只保留最近 KEEP_RECENT 条原话，
+    让模型上下文始终可控，又不丢 request_id 之类的硬信息。
+    """
     rows = (await session.scalars(select(Message).where(
         Message.incident_id == incident.id, Message.group_id == incident.group_id,
         Message.from_us.is_(False)).order_by(Message.id))).all()
     if not rows:
         return "", "", 0
-    text = "\n".join(f"[{m.created_at:%H:%M:%S}] {m.sender}: {m.text}" for m in rows)
-    return text, rows[-1].external_id, rows[-1].id
+    latest, newest = rows[-1].external_id, rows[-1].id
+    total_chars = sum(len(m.text) for m in rows)
+    if len(rows) <= COMPRESS_OVER and total_chars <= COMPRESS_CHARS:
+        return "\n".join(_line(m) for m in rows), latest, newest
+
+    recent, older = rows[-KEEP_RECENT:], rows[:-KEEP_RECENT]
+    pending = [m for m in older if m.id > incident.conv_summary_upto]
+    if pending and (not incident.conv_summary or len(pending) >= RESUMMARIZE_EVERY):
+        summary = await llm.summarize_conversation(
+            incident.conv_summary, "\n".join(_line(m) for m in pending))
+        if summary:
+            incident.conv_summary, incident.conv_summary_upto = summary, pending[-1].id
+            record(session, incident.id, "compressed",
+                   f"对话较长，已把较早的 {len(older)} 条消息压缩为摘要")
+            pending = []
+    parts = []
+    if incident.conv_summary:
+        parts.append(f"【更早对话的摘要】\n{incident.conv_summary}")
+    else:  # AI 不可用：保留最开始的问题描述，中间省略
+        head = older[:2]
+        parts.append("\n".join(_line(m) for m in head))
+        pending = older[2:][-4:]
+        if len(older) > 2 + len(pending):
+            parts.append(f"……（中间省略 {len(older) - 2 - len(pending)} 条）……")
+    if pending:  # 摘要之后、最近原话之前还没压缩的消息，原样带上
+        parts.append("\n".join(_line(m) for m in pending))
+    parts.append("【最近的消息】\n" + "\n".join(_line(m) for m in recent))
+    return "\n\n".join(parts), latest, newest
 
 
 PROGRESS = {
@@ -353,12 +393,14 @@ async def _handle_quote(session: AsyncSession, group: Group, msg: Message, m: In
 
 
 # 同一个群的消息严格按顺序处理：排查要十几秒，期间同群的新消息排队，
-# 等前一条处理完再合并 / 整合，避免并发改写同一条回复。（单进程部署）
+# 等前一条处理完再合并 / 整合，避免并发改写同一条回复。
+# 进程内先用 asyncio.Lock 保证先来先处理，再用数据库租约挡住其他进程 / 副本。
 _group_locks: dict[tuple[str, str], asyncio.Lock] = defaultdict(asyncio.Lock)
 
 
 async def handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident | None:
-    async with _group_locks[(m.platform, m.chat_id)]:
+    key = (m.platform, m.chat_id)
+    async with _group_locks[key], lease.hold(f"group:{m.platform}:{m.chat_id}"):
         try:
             return await _handle_inbound(session, m)
         except Exception as e:
@@ -402,6 +444,29 @@ async def _read_images(m: InboundMessage) -> None:
     if readings:
         base = "" if m.text == "[图片]" else m.text + "\n"
         m.text = base + "\n".join(f"[截图内容] {r}" for r in readings)
+
+
+async def _respond_chat(session: AsyncSession, group: Group, m: InboundMessage, kind: str) -> None:
+    """没有进行中的问题，但客户在叫我们 / 问一般性问题：像真人一样接一句，而不是装没看见。
+
+    招呼直接回；咨询类先查知识库，答不了就说去确认（倒计时期间人工可改），绝不编造。
+    """
+    style = await style_of(session, group)
+    if kind == "greeting":
+        text = await llm.compose(
+            "客户在招呼/呼叫我们，回应说在的，请他直接说需要什么帮助。一句话，自然随意",
+            f"客户刚发的消息: {m.text}", style, "在的，您说～")
+        await presend.enqueue(session, group, text, 100, "greeting", reply_to=m.message_id)
+        return
+    hits = await knowledge.search(session, m.text, "")
+    ref = "\n".join(f"- {k.title}：{k.solution}" for k in hits)
+    text = await llm.compose(
+        "回答客户的咨询。只能用「知识库」里有的信息回答；知识库没有答案时，说帮他确认一下稍后回复，"
+        "不要编造产品能力、价格或时间",
+        f"客户刚发的消息: {m.text}\n\n知识库:\n{ref or '（没有相关条目）'}", style,
+        "我帮您确认一下，稍后回复您～")
+    # 有知识库依据的回答 10 分钟倒计时；没有依据只是「去确认」，必须人工看一眼并跟进
+    await presend.enqueue(session, group, text, 80 if hits else 60, "chat", reply_to=m.message_id)
 
 
 async def _handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident | None:
@@ -451,6 +516,8 @@ async def _handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident 
             await _respond_followup(session, group, active, m)
             await session.commit()
             return active
+        if c.reply_kind in ("greeting", "question") and not m.is_bot:
+            await _respond_chat(session, group, m, c.reply_kind)
         await session.commit()
         return None
 

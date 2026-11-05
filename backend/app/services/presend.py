@@ -3,7 +3,7 @@
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -42,7 +42,7 @@ def delay_for(score: int, group: Group, purpose: str) -> int | None:
         return 0  # 内部群里 @ 负责人，不需要审批
     if group.automation == AutomationMode.observe:
         return None
-    if purpose in ("ack", "escalation"):  # 低风险安抚消息，直接发
+    if purpose in ("ack", "escalation", "greeting"):  # 低风险安抚 / 招呼，直接发
         return 0 if group.automation == AutomationMode.auto else None
     if group.automation == AutomationMode.confirm:
         return None
@@ -95,7 +95,7 @@ async def claim(session: AsyncSession, item_id: int, allowed=OPEN) -> bool:
     result = await session.execute(
         update(Outbound)
         .where(Outbound.id == item_id, Outbound.status.in_(allowed))
-        .values(status=OutboundStatus.sending)
+        .values(status=OutboundStatus.sending, claimed_at=utcnow())
     )
     await session.commit()
     return result.rowcount == 1
@@ -189,10 +189,20 @@ async def flush_due(session: AsyncSession) -> int:
     return sent
 
 
-async def recover_stuck(session: AsyncSession) -> None:
-    """进程在发送中崩溃时，把卡住的消息标为失败，交给人工处理。"""
-    await session.execute(
-        update(Outbound).where(Outbound.status == OutboundStatus.sending)
-        .values(status=OutboundStatus.failed, error="发送过程中服务重启，请确认后重发")
+STUCK_AFTER = timedelta(minutes=5)
+
+
+async def recover_stuck(session: AsyncSession) -> int:
+    """发送中卡住超过 5 分钟（进程崩溃 / 重启）的消息标为失败，交给人工确认。
+
+    只看认领时间，不会误伤其他进程正在发送的消息；多副本部署时也安全。
+    """
+    cutoff = utcnow() - STUCK_AFTER
+    r = await session.execute(
+        update(Outbound)
+        .where(Outbound.status == OutboundStatus.sending,
+               or_(Outbound.claimed_at.is_(None), Outbound.claimed_at < cutoff))
+        .values(status=OutboundStatus.failed, error="发送过程中服务中断，请确认对方是否已收到后再重发")
     )
     await session.commit()
+    return r.rowcount

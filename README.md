@@ -17,7 +17,7 @@ docker compose up -d --build
 
 访问 http://服务器:8000 ，用 `ADMIN_TOKEN` 登录。数据库迁移在启动时自动执行。需要在前面加 HTTPS 反向代理（Telegram / 飞书回调要求 HTTPS）。
 
-> 预发调度器运行在应用进程内，请保持**单实例单进程**运行。
+> 支持多进程 / 多副本（如 `uvicorn --workers 4` 或多个容器）：调度器、Telegram 轮询和同群消息处理都通过数据库租约协调。多副本请使用 PostgreSQL；SQLite 只适合单机。
 
 ## 本地开发
 

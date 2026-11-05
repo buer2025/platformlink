@@ -7,6 +7,7 @@ from app.models import IncidentEvent
 PURPOSE_NAMES = {
     "ack": "安抚回复", "customer_reply": "客户回复", "supplier_ticket": "供应商转交单",
     "supplier_remind": "供应商催办", "quota_push": "催量", "escalation": "升级人工", "manual": "人工消息",
+    "greeting": "招呼回应", "chat": "咨询回复",
 }
 
 
