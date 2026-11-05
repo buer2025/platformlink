@@ -4,6 +4,7 @@ import re
 import anthropic
 from pydantic import BaseModel, Field
 
+from app.agent import jev
 from app.config import settings
 
 log = logging.getLogger(__name__)
@@ -105,7 +106,20 @@ def _rule_classify(text: str) -> Classification:
                           summary=text[:80], confidence=60, reply_kind="none")
 
 
+JEV_SURE = 0.2  # Jev 给出的「成立」概率低于这个值才视为有把握的「否」，否则交给 Claude
+
+
 async def classify(text: str) -> Classification:
+    """分诊。启用 Jev 时先用它做亚秒级判断：有把握不是问题就直接返回（群里大部分消息），
+    是问题或拿不准时才调 Claude 抽取模型 / request_id / 摘要。"""
+    if jev.enabled():
+        a = await jev.decide(jev.triage_state(text), jev.TRIAGE)
+        if a and a["is_issue"]["noul"] <= JEV_SURE:
+            rid = m.group(1) if (m := REQ_ID.search(text)) else ""
+            return Classification(
+                is_issue=False, category="other", model="", request_id=rid, summary="",
+                confidence=round((1 - a["is_issue"]["noul"]) * 100),
+                reply_kind=a["reply_kind"]["choice"])
     result = await _parse(
         "你是模型 API 聚合平台的技术支持分诊员。判断客户群里这条消息是否需要处理（故障反馈或用量需求）并抽取字段。"
         "is_issue=false 时必须认真填 reply_kind：客户叫我们（在吗/有人吗/@我方）→ greeting；"
@@ -201,6 +215,12 @@ PERSISTS = re.compile(r"(还是|依然|仍然|又|再次|没好|没解决|不行
 async def followup(conversation: str, new_text: str, context: str, quoted: str = "",
                    resolved: bool = False) -> FollowupDecision:
     """客户在已有事件里又说话（可能引用了某条消息）：判断要不要回、问题是否还在，并起草回复。"""
+    if jev.enabled():  # 「好的」「👍」这类有把握不用回的，Jev 直接定，不再调 Claude
+        a = await jev.decide(jev.followup_state(conversation, new_text, context, quoted), jev.FOLLOWUP)
+        if a and a["should_reply"]["noul"] <= JEV_SURE:
+            return FollowupDecision(
+                should_reply=False, problem_persists=a["problem_persists"]["noul"] >= 0.5,
+                reason=f"Jev 判断无需回复（回复倾向 {a['should_reply']['noul']:.2f}）", text="")
     q = f"\n客户引用的消息: 「{quoted}」" if quoted else ""
     r = await _parse(
         FOLLOWUP + "\n先判断这条消息的意图，再决定要不要回：\n"

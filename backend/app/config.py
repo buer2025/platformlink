@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     # 中转 / 代理地址；为空时使用官方 API
     anthropic_base_url: str = ""
+    # Jev 结构化决策（AGTCloud /v1/decisions）：只做判断/分类，不生成文字；空 = 不用
+    jev_model: str = ""
+    jev_base_url: str = ""  # 默认与 ANTHROPIC_BASE_URL 相同
+    jev_api_key: str = ""  # 默认与 ANTHROPIC_API_KEY 相同
 
     # 后台登录口令（必须配置；为空时拒绝所有后台请求）
     admin_token: str = ""

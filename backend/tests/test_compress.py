@@ -121,3 +121,63 @@ async def test_question_without_knowledge_needs_human(client, fake, monkeypatch)
     await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 803, "你们能开专票吗"))
     out = await outbound(client)
     assert out[0]["purpose"] == "chat" and out[0]["status"] == "needs_approval"
+
+
+# ---------- Jev 结构化决策：有把握时省掉 Claude，拿不准或失败时回退 ----------
+
+def _jev(monkeypatch, answers):
+    from app.agent import jev
+    from app.config import settings
+    monkeypatch.setattr(settings, "jev_model", "jev-test")
+    monkeypatch.setattr(settings, "anthropic_api_key", "k")
+    calls = []
+
+    async def decide(state, questions, timeout=15):
+        calls.append(questions)
+        return answers
+
+    monkeypatch.setattr(jev, "decide", decide)
+    return calls
+
+
+async def test_jev_confident_non_issue_skips_claude(monkeypatch):
+    from app.agent import llm
+    calls = _jev(monkeypatch, {"is_issue": {"noul": 0.04},
+                               "category": {"choice": "other"},
+                               "reply_kind": {"choice": "greeting"}})
+
+    async def no_claude(*a, **k):
+        raise AssertionError("不应调用 Claude")
+
+    monkeypatch.setattr(llm, "_parse", no_claude)
+    c = await llm.classify("在吗")
+    assert not c.is_issue and c.reply_kind == "greeting" and len(calls) == 1
+
+
+async def test_jev_uncertain_falls_back_to_claude(monkeypatch):
+    from app.agent import llm
+    _jev(monkeypatch, {"is_issue": {"noul": 0.6}, "category": {"choice": "error"},
+                       "reply_kind": {"choice": "none"}})
+    used = []
+
+    async def claude(*a, **k):
+        used.append(1)
+        # 让它走规则兜底
+
+    monkeypatch.setattr(llm, "_parse", claude)
+    c = await llm.classify("seedance 报错 500")
+    assert used and c.is_issue
+
+
+async def test_jev_followup_no_reply_and_failure_fallback(monkeypatch):
+    from app.agent import jev, llm
+    _jev(monkeypatch, {"should_reply": {"noul": 0.05}, "problem_persists": {"noul": 0.02}})
+    d = await llm.followup("conv", "👍", "状态: 排查中")
+    assert not d.should_reply and not d.problem_persists and "Jev" in d.reason
+
+    async def fail(*a, **k):
+        return None
+
+    monkeypatch.setattr(jev, "decide", fail)
+    d = await llm.followup("conv", "还是不行", "状态: 排查中")  # Claude 不可用 → 规则兜底
+    assert d.should_reply and d.problem_persists

@@ -8,6 +8,7 @@ os.environ.update(
     ANTHROPIC_API_KEY="",
     ANTHROPIC_BASE_URL="",
     LOG_DATABASE_URL="",
+    JEV_MODEL="",
     TELEGRAM_MODE="webhook",
     ADMIN_TOKEN="test-admin",
     TELEGRAM_WEBHOOK_SECRET="tg-secret",
