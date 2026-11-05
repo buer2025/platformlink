@@ -46,6 +46,8 @@ const eventMeta: Record<string, [string, LucideIcon, Tone]> = {
   quoted: ['引用追问', MessageCircle, 'slate'],
   reopened: ['重新打开', RotateCcw, 'warn'],
   escalated: ['升级人工', CircleAlert, 'bad'],
+  auto_closed: ['自动关闭', Timer, 'slate'],
+  memory_saved: ['沉淀记忆', Lightbulb, 'ok'],
   note: ['备注', NotebookPen, 'slate'],
   knowledge_saved: ['沉淀知识', BookPlus, 'ok'],
 }

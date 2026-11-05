@@ -35,6 +35,7 @@ class Ctx:
     group: Group
     incident: Incident
     c: llm.Classification
+    memories: list[str] = field(default_factory=list)  # 这个客户的过往记忆
     text: str = ""  # 客户原话（分诊摘要可能丢细节，例如具体的目标量级）
     found: bool = False
     channel_ids: list[int] = field(default_factory=list)
@@ -224,6 +225,9 @@ def _context(ctx: Ctx, instructions: str, preloaded: str) -> str:
         (f"## 客户原话\n{ctx.text or ctx.c.summary}\n（分诊：类别 {ctx.c.category}，模型 {ctx.c.model or '未知'}，"
         f"request_id {ctx.c.request_id or '未提供'}）"),
     ]
+    if ctx.memories:
+        parts.append("## 这个客户的过往（新会话，仅供参考，不要主动翻旧账）\n"
+                     + "\n".join(f"- {x}" for x in ctx.memories))
     if instructions:
         parts.append(f"## 本链路的处理说明\n{instructions}")
     if preloaded:

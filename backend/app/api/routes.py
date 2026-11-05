@@ -12,6 +12,7 @@ from app.im.base import InboundMessage
 from app.im.registry import get_adapter
 from app.models import (
     Group,
+    GroupMemory,
     Incident,
     IncidentEvent,
     IncidentStatus,
@@ -45,7 +46,7 @@ from app.schemas import (
     WorkflowIn,
     WorkflowOut,
 )
-from app.services import knowledge, presend
+from app.services import knowledge, memory, presend
 from app.services.events import record
 from app.services.pipeline import handle_inbound
 
@@ -116,6 +117,24 @@ async def preview_group_style(group_id: int, body: StylePreviewIn, s: AsyncSessi
         raise HTTPException(404, "群不存在")
     style = body.style if body.style is not None else (g.style or {})
     return {"text": await llm.stylize(body.text, style, "customer_reply")}
+
+
+@admin.get("/groups/{group_id}/memories")
+async def list_memories(group_id: int, s: AsyncSession = Session):
+    rows = (await s.scalars(select(GroupMemory).where(GroupMemory.group_id == group_id)
+                            .order_by(GroupMemory.id.desc()).limit(100))).all()
+    return [{"id": m.id, "text": m.text, "incident_id": m.incident_id,
+             "created_at": presend.aware(m.created_at)} for m in rows]
+
+
+@admin.delete("/memories/{memory_id}")
+async def delete_memory(memory_id: int, s: AsyncSession = Session):
+    m = await s.get(GroupMemory, memory_id)
+    if not m:
+        raise HTTPException(404, "记忆不存在")
+    await s.delete(m)
+    await s.commit()
+    return {"ok": True}
 
 
 @admin.get("/parties", response_model=list[PartyOut])
@@ -194,6 +213,7 @@ async def update_incident(incident_id: int, body: IncidentUpdate, s: AsyncSessio
             setattr(i, k, v)
     if changes.get("status") == IncidentStatus.resolved and not i.resolved_at:
         i.resolved_at = presend.utcnow()
+        await memory.remember(s, i)
     elif "status" in changes and changes["status"] != IncidentStatus.resolved:
         i.resolved_at = None
     if body.note.strip():

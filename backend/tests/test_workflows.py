@@ -386,3 +386,51 @@ async def test_acks_skip_ai(client, fake, monkeypatch):  # noqa: F811
     monkeypatch.setattr(llm, "classify", boom)
     for i, t in enumerate(["好的", "👍", "收到~", "谢谢啦"]):
         await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 96 + i, t))
+
+
+async def test_session_lifecycle_memory(client, fake, monkeypatch):  # noqa: F811
+    """空闲自动关闭 → 沉淀记忆 → 新会话的 Agent 能看到记忆；手动解决也会沉淀。"""
+    from datetime import timedelta
+
+    from sqlalchemy import update
+
+    from app.agent import harness
+    from app.db import SessionLocal
+    from app.models import Incident, IncidentEvent
+    from app.services import memory, presend
+    cid, _ = await setup_groups(client)
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 111, "seedance 报错了"))
+    inc = (await client.get("/api/incidents")).json()[0]
+
+    async with SessionLocal() as s:  # 把时间拨回 2 天前
+        old = presend.utcnow() - timedelta(days=2)
+        await s.execute(update(IncidentEvent).values(created_at=old))
+        await s.execute(update(Incident).values(created_at=old))
+        await s.commit()
+        assert await memory.close_idle(s) == 1
+        assert await memory.close_idle(s) == 0
+    cur = (await client.get(f"/api/incidents/{inc['id']}")).json()
+    assert cur["status"] == "resolved"
+    mems = (await client.get(f"/api/groups/{cid}/memories")).json()
+    assert len(mems) == 1 and "seedance" in mems[0]["text"]
+    kinds = [e["kind"] for e in (await client.get(f"/api/incidents/{inc['id']}/events")).json()]
+    assert "auto_closed" in kinds and "memory_saved" in kinds
+
+    # 新会话：开新事件，Agent 上下文带上记忆
+    seen = {}
+
+    async def spy(ctx, instructions="", preloaded=""):
+        seen["memories"] = ctx.memories
+        seen["prompt"] = harness._context(ctx, instructions, preloaded)
+    monkeypatch.setattr(harness, "run", spy)
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 112, "seedance 又报错了"))
+    assert len((await client.get("/api/incidents")).json()) == 2
+    assert seen["memories"] == [mems[0]["text"]] and "这个客户的过往" in seen["prompt"]
+
+    # 手动解决也会沉淀；删除记忆
+    new = (await client.get("/api/incidents")).json()[0]
+    await client.patch(f"/api/incidents/{new['id']}", json={"status": "resolved"})
+    mems = (await client.get(f"/api/groups/{cid}/memories")).json()
+    assert len(mems) == 2
+    await client.delete(f"/api/memories/{mems[0]['id']}")
+    assert len((await client.get(f"/api/groups/{cid}/memories")).json()) == 1

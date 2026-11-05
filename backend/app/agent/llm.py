@@ -250,6 +250,20 @@ def _now_cn() -> str:
     return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%H:%M（%A）")
 
 
+class Memory(BaseModel):
+    text: str = Field(description="一句话记忆，60 字以内")
+
+
+async def summarize_memory(transcript: str) -> str:
+    """把一次处理过程压缩成一句客户记忆：下次和这个客户打交道时值得知道的事。"""
+    r = await _parse(
+        "把下面这次问题处理压缩成一句话的「客户记忆」，供下次和这个客户沟通时参考。"
+        "格式：日期省略，写「问题 + 原因/结果 + 值得记住的客户特点或偏好」，例如："
+        "「seedance 上游 429，已协调扩容；客户做直播，很在意恢复时间」。只写记录里出现过的事实，60 字以内。",
+        transcript, Memory, effort="low")
+    return r.text.strip() if r else ""
+
+
 async def stylize(text: str, style: dict, purpose: str) -> str:
     """按群的风格标记改写消息；无 Key 时做最基本的称呼处理。"""
     if not style or not any(style.values()):

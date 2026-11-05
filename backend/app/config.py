@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     incident_merge_minutes: int = 30
     # 未解决事件在多久内承接客户的追问 / 催促（持续对话）
     conversation_hours: int = 6
+    # 未解决事件多久没有动静自动关闭（并沉淀客户记忆）
+    incident_idle_hours: int = 24
     # 升级人工：Agent 准确率低于此值，或客户追问达到次数时 @ 内部负责人
     escalate_below_confidence: int = 50
     escalate_after_followups: int = 2

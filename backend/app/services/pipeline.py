@@ -24,7 +24,7 @@ from app.models import (
     Staff,
     Workflow,
 )
-from app.services import knowledge, presend
+from app.services import knowledge, memory, presend
 from app.services.escalation import escalate
 from app.services.events import record
 
@@ -186,6 +186,7 @@ async def _investigate(session: AsyncSession, group: Group, incident: Incident,
     instructions = wf.instructions if wf else ""
     preloaded = ev.text + (f"\n\n## 知识库命中\n{knowledge.as_prompt(kb)}" if kb else "")
     ctx = harness.Ctx(session=session, group=group, incident=incident, c=c, text=text,
+                      memories=await memory.recall(session, group.id),
                       found=ev.found,
                       channel_ids=list(ev.channel_ids), knowledge_ids=[k.id for k in kb])
     f = await harness.run(ctx, instructions, preloaded)

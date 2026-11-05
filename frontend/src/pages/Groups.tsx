@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { ChevronRight, Database, MessagesSquare, Search, Sparkles, Wand2 } from 'lucide-react'
+import { Brain, ChevronRight, Database, MessagesSquare, Search, Sparkles, Trash2, Wand2 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { api, fmtTime, patch, platformLabel, post, type Group, type Message } from '../api'
+import { api, del, fmtTime, patch, platformLabel, post, type Group, type Message } from '../api'
 import { useHotkeys, useListNav } from '../hooks'
 import { Badge, Button, Card, Drawer, Empty, Field, Input, PageHeader, Segmented, Select, Skeleton, TagInput, Textarea, type Tone } from '../ui'
 
@@ -118,6 +118,39 @@ function StyleSection({ g, f, set, ev }: { g: Group; f: Record<string, any>; set
   )
 }
 
+type Memory = { id: number; text: string; incident_id: number | null; created_at: string }
+
+/** 客户记忆：每次会话关闭自动沉淀一句，新会话时 Agent 会先看这些。 */
+function Memories({ groupId }: { groupId: number }) {
+  const qc = useQueryClient()
+  const { data = [] } = useQuery({ queryKey: ['memories', groupId], queryFn: () => api<Memory[]>(`/groups/${groupId}/memories`) })
+  const remove = useMutation({
+    mutationFn: (id: number) => del(`/memories/${id}`),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['memories', groupId] }),
+  })
+  return (
+    <section>
+      <h3 className="flex items-center gap-1.5 text-[13px] font-semibold"><Brain size={14} />客户记忆</h3>
+      <p className="mt-0.5 text-xs text-fg-3">每次会话结束（手动解决或 24 小时无动静自动关闭）沉淀一句。新问题进来时 Agent 会先看最近 5 条。</p>
+      {data.length === 0 ? <p className="mt-3 text-xs text-fg-3">还没有记忆</p> : (
+        <ul className="mt-3 space-y-1">
+          <AnimatePresence initial={false}>
+            {data.map((m) => (
+              <motion.li key={m.id} layout exit={{ opacity: 0, x: -12 }}
+                className="group flex items-start gap-3 rounded-lg px-2 py-1.5 text-[13px] hover:bg-panel-2">
+                <span className="tnum mt-0.5 w-11 shrink-0 text-[11px] text-fg-3">{new Date(m.created_at).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })}</span>
+                <span className="flex-1 leading-relaxed">{m.text}</span>
+                <button aria-label="删除这条记忆" className="mt-0.5 text-fg-3 opacity-0 transition-opacity group-hover:opacity-100 hover:text-bad"
+                  onClick={() => remove.mutate(m.id)}><Trash2 size={13} /></button>
+              </motion.li>
+            ))}
+          </AnimatePresence>
+        </ul>
+      )}
+    </section>
+  )
+}
+
 function Editor({ g, onClose }: { g: Group | undefined; onClose: () => void }) {
   const qc = useQueryClient()
   const [f, setF] = useState<Record<string, any>>({})
@@ -198,6 +231,7 @@ function Editor({ g, onClose }: { g: Group | undefined; onClose: () => void }) {
               </>}
           </Section>
           <StyleSection g={g!} f={f} set={set} ev={ev} />
+          <Memories groupId={g!.id} />
           <section>
             <h3 className="mb-2 text-[13px] font-semibold">最近消息</h3>
             {msgs.length === 0 ? <p className="text-xs text-fg-3">暂无</p> : (

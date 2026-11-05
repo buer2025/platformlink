@@ -224,3 +224,14 @@ class Knowledge(Base):
     enabled: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class GroupMemory(Base):
+    """客户记忆：每次事件关闭时沉淀一句话，新会话开始时给 Agent 参考。"""
+
+    __tablename__ = "group_memories"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id"), index=True)
+    incident_id: Mapped[int | None] = mapped_column(ForeignKey("incidents.id"))
+    text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

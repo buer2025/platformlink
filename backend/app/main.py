@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.routes import admin, public
 from app.config import settings
 from app.db import SessionLocal, run_migrations
+from app.services.memory import close_idle
 from app.services.presend import flush_due, recover_stuck, remind_suppliers
 from app.services.seed import seed_defaults
 
@@ -20,11 +22,15 @@ STATIC = Path(__file__).resolve().parent.parent / "static"
 
 
 async def scheduler() -> None:
+    last_close = 0.0
     while True:
         try:
             async with SessionLocal() as s:
                 await remind_suppliers(s)
                 await flush_due(s)
+                if time.monotonic() - last_close > 300:  # 每 5 分钟检查一次空闲会话
+                    last_close = time.monotonic()
+                    await close_idle(s)
         except Exception:
             log.exception("presend scheduler failed")
         await asyncio.sleep(settings.scheduler_interval_seconds)
