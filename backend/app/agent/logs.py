@@ -11,6 +11,7 @@ channels 表：id, name, type, status(1启用 2手动禁用 3自动禁用), mode
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -82,8 +83,11 @@ def set_logdb(db: LogDB | None) -> None:
 
 
 def _fmt_ts(ts: Any) -> str:
+    """日志时间统一按业务时区显示，和客户报障时间放在一起才对得上。"""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
     try:
-        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(int(ts)))
+        return datetime.fromtimestamp(int(ts), ZoneInfo(settings.timezone)).strftime("%Y-%m-%d %H:%M:%S")
     except (TypeError, ValueError):
         return str(ts)
 
@@ -135,17 +139,24 @@ async def by_request_id(db: LogDB, rid: str, ev: Evidence) -> None:
     if t is None:
         ev.add("日志库不可用")
         return
+    recent = t.c.created_at >= int(time.time()) - 3 * 86400
     if "request_id" in t.c:
         cond = t.c.request_id == rid
     else:  # 老版本没有 request_id 列，退而在 other/content 里找（限最近 3 天）
-        like = [t.c[c].contains(rid) for c in ("other", "content") if c in t.c]
-        cond = or_(*like) & (t.c.created_at >= int(time.time()) - 3 * 86400)
+        cond = or_(*[t.c[c].contains(rid) for c in ("other", "content") if c in t.c]) & recent
     rows = await db.rows(select(t).where(cond).order_by(t.c.id.desc()).limit(10))
+    note = f"找到 {len(rows)} 条"
+    if not rows and len(rid) >= 8:
+        # 客户常给截断的、带前后缀的或上游返回的 ID：在 request_id / other / content 里模糊找
+        cols = [c for c in ("request_id", "other", "content") if c in t.c]
+        rows = await db.rows(select(t).where(or_(*[t.c[c].contains(rid) for c in cols]) & recent)
+                             .order_by(t.c.id.desc()).limit(10))
+        note = f"精确匹配没有，模糊匹配到 {len(rows)} 条（客户给的可能是截断的或上游的 ID）"
     if not rows:
-        ev.add(f"[request_id] {rid}：日志库中未找到")
+        ev.add(f"[request_id] {rid}：日志库中未找到（精确与模糊都没有）")
         return
     ev.found = True
-    ev.add(f"[request_id] {rid}：找到 {len(rows)} 条")
+    ev.add(f"[request_id] {rid}：{note}")
     for r in rows:
         ev.add("  " + _fmt_log(r))
         if r.get("channel_id"):
@@ -270,3 +281,75 @@ async def channel_429(db: LogDB, channel_ids: list[int], hours: int = 24) -> dic
         "errors": (await db.rows(q(t.c.type == 5)))[0]["n"],
         "success": (await db.rows(q(t.c.type == 2)))[0]["n"],
     }
+
+
+# ---------------- 结构化证据（供证据清单与排查 Agent 使用） ----------------
+
+_CODE = re.compile(r"status_code[\"']?\s*[:=]\s*(\d{3})|\b(4\d\d|5\d\d)\b")
+
+
+def error_code(r: dict) -> str:
+    """从一条错误日志里取 HTTP 状态码；取不到返回空。"""
+    if r.get("other"):
+        try:
+            code = json.loads(r["other"]).get("status_code")
+            if code:
+                return str(code)
+        except (TypeError, ValueError, AttributeError):
+            pass
+    m = _CODE.search(str(r.get("content") or ""))
+    return (m.group(1) or m.group(2)) if m else ""
+
+
+async def window(db: LogDB, users: list[str], model: str, start: int, end: int) -> dict | None:
+    """客户在 [start, end] 时间段内的调用：成功数、错误数、错误码分布、渠道分布、最近一次成功/错误。"""
+    t = await db.table("logs")
+    if t is None:
+        return None
+    uf = _user_filter(t, users)
+    if uf is None:
+        return None
+    conds = [uf, t.c.created_at >= start, t.c.created_at <= end, t.c.type.in_([2, 5])]
+    if (mf := _model_filter(t, model)) is not None:
+        conds.append(mf)
+    rows = await db.rows(select(t).where(*conds).order_by(t.c.created_at.desc()).limit(2000))
+    out = {"ok": 0, "err": 0, "codes": {}, "channels": {}, "last_ok": None, "last_err": None,
+           "sample": None}
+    for r in rows:
+        if r["type"] == 2:
+            out["ok"] += 1
+            out["last_ok"] = out["last_ok"] or r["created_at"]
+            continue
+        out["err"] += 1
+        out["last_err"] = out["last_err"] or r["created_at"]
+        out["sample"] = out["sample"] or _fmt_log(r)
+        code = error_code(r) or "?"
+        out["codes"][code] = out["codes"].get(code, 0) + 1
+        if r.get("channel_id"):
+            ch = int(r["channel_id"])
+            out["channels"][ch] = out["channels"].get(ch, 0) + 1
+    return out
+
+
+async def channel_impact(db: LogDB, channel_ids: list[int], start: int, end: int) -> list[dict]:
+    """渠道在时间段内对所有客户的表现：调用数、错误率、受影响的客户数、错误码。用于区分个例与上游故障。"""
+    t = await db.table("logs")
+    if t is None or not channel_ids or "channel_id" not in t.c:
+        return []
+    who = t.c.username if "username" in t.c else t.c.user_id
+    out = []
+    for ch in list(dict.fromkeys(channel_ids))[:3]:
+        rows = await db.rows(select(t.c.type, who.label("who"), *[t.c[c] for c in ("content", "other")
+                                                                      if c in t.c])
+                             .where(t.c.channel_id == ch, t.c.created_at >= start,
+                                    t.c.created_at <= end, t.c.type.in_([2, 5])).limit(5000))
+        ok = sum(1 for r in rows if r["type"] == 2)
+        errs = [r for r in rows if r["type"] == 5]
+        codes: dict[str, int] = {}
+        for r in errs:
+            c = error_code(r) or "?"
+            codes[c] = codes.get(c, 0) + 1
+        out.append({"channel_id": ch, "ok": ok, "err": len(errs),
+                    "users_err": len({r["who"] for r in errs}),
+                    "users_total": len({r["who"] for r in rows}), "codes": codes})
+    return out

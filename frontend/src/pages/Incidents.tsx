@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import {
-  BookPlus, Bot, CornerUpLeft, Check, ChevronRight, CircleAlert, Database, GitMerge, Lightbulb, MessageCircle,
-  NotebookPen, Pencil, UserRound, type LucideIcon, RotateCcw, Send, Sparkles, Timer, Wrench, X, Zap,
+  BookPlus, Bot, Minus, CornerUpLeft, Check, ChevronRight, CircleAlert, Database, GitMerge, Lightbulb, MessageCircle,
+  NotebookPen, Pencil, UserRound, type LucideIcon, RotateCcw, Send, ShieldCheck, Sparkles, Timer, Wrench, X, Zap,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useState, type ReactNode } from 'react'
@@ -60,6 +60,7 @@ const eventMeta: Record<string, [string, LucideIcon, Tone]> = {
   note: ['备注', NotebookPen, 'slate'],
   compressed: ['压缩对话', GitMerge, 'slate'],
   knowledge_saved: ['沉淀知识', BookPlus, 'ok'],
+  evidence: ['证据清单', ShieldCheck, 'info'],
 }
 
 const toneColor: Record<string, string> = {
@@ -153,6 +154,37 @@ function Evidence({ text }: { text: string }) {
   )
 }
 
+/** 证据清单：哪些已证实、哪些矛盾、还缺什么 —— 准确率为什么是这个数。 */
+function EvidenceChecks({ checks }: { checks: Incident['evidence_checks'] }) {
+  if (!checks?.length) return null
+  const meta = {
+    ok: ['text-ok bg-ok-soft', Check, '已证实'],
+    warn: ['text-warn bg-warn-soft', CircleAlert, '有矛盾'],
+    missing: ['text-fg-3 bg-panel-2', Minus, '缺失'],
+  } as const
+  const n = (s: string) => checks.filter((c) => c.state === s).length
+  return (
+    <section>
+      <div className="mb-2 flex items-baseline gap-3">
+        <h3 className="text-[13px] font-medium">证据清单</h3>
+        <span className="text-xs text-fg-3 tabular-nums">已证实 {n('ok')} · 矛盾 {n('warn')} · 缺失 {n('missing')}</span>
+      </div>
+      <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line">
+        {checks.map((c) => {
+          const [cls, Icon, word] = meta[c.state]
+          return (
+            <li key={c.key} className="flex items-start gap-3 px-3.5 py-2.5">
+              <span title={word} className={clsx('mt-px grid size-5 shrink-0 place-items-center rounded-full', cls)}><Icon size={11} strokeWidth={2.5} /></span>
+              <span className="w-[5.5em] shrink-0 text-[13px] font-medium text-fg-2">{c.label}</span>
+              <span className={clsx('min-w-0 text-[13px] leading-relaxed', c.state === 'missing' ? 'text-fg-3' : 'text-fg-2')}>{c.detail}</span>
+            </li>
+          )
+        })}
+      </ul>
+    </section>
+  )
+}
+
 function Fact({ label, children, mono }: { label: string; children: ReactNode; mono?: boolean }) {
   return (
     <div className="min-w-0">
@@ -228,6 +260,7 @@ function IncidentDrawer({ i, groups, workflows, onClose }: {
           </div>
           {/* 第二层：依据（默认折叠到 4 行） */}
           {i.evidence && <Evidence text={i.evidence} />}
+          <EvidenceChecks checks={i.evidence_checks} />
           <Assignee incident={i} />
           {/* 第三层：事实，弱化展示 */}
           <dl className="grid grid-cols-2 gap-x-6 gap-y-3 rounded-xl bg-panel-2/60 px-4 py-3.5 sm:grid-cols-3">

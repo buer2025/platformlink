@@ -9,7 +9,7 @@ from datetime import timedelta
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent import harness, llm, logs
+from app.agent import evidence, harness, llm, logs
 from app.config import settings
 from app.im.base import InboundMessage
 from app.models import (
@@ -236,8 +236,21 @@ async def _investigate(session: AsyncSession, group: Group, incident: Incident,
             k.hits += 1
         record(session, incident.id, "knowledge",
                "参考知识：" + "；".join(f"#{k.id} {k.title}" for k in kb))
+    # 证据清单：报障时段日志、错误码是否一致、同渠道其他客户、渠道实测……
+    report_ts = int(presend.aware(incident.created_at).timestamp())
+    try:
+        checks = await evidence.collect(text, c.request_id, group.api_users or [], c.model, report_ts,
+                                        rid_found=ev.found and bool(c.request_id),
+                                        channel_ids=list(ev.channel_ids), knowledge_hits=len(kb))
+    except Exception:
+        log.exception("证据清单收集失败")
+        checks = []
+    incident.evidence_checks = evidence.as_json(checks)
+    if checks:
+        record(session, incident.id, "evidence", "证据清单\n" + evidence.as_prompt(checks))
     instructions = wf.instructions if wf else ""
-    preloaded = ev.text + (f"\n\n## 知识库命中\n{knowledge.as_prompt(kb)}" if kb else "")
+    preloaded = ev.text + (f"\n\n## 证据清单（✓ 已证实 ⚠ 矛盾/指向别处 ✗ 缺失）\n{evidence.as_prompt(checks)}"
+                           if checks else "") + (f"\n\n## 知识库命中\n{knowledge.as_prompt(kb)}" if kb else "")
     ctx = harness.Ctx(session=session, group=group, incident=incident, c=c, text=text,
                       memories=await memory.recall(session, group.id),
                       found=ev.found,
@@ -248,6 +261,9 @@ async def _investigate(session: AsyncSession, group: Group, incident: Incident,
         f = await llm.investigate(c, ev.text, instructions, ev.found, knowledge.as_prompt(kb))
     incident.knowledge_ids = ctx.knowledge_ids
     ev.channel_ids = ctx.channel_ids
+    f.confidence, capped = evidence.calibrate(f.confidence, incident.evidence_checks or [])
+    if capped:
+        f.self_check = (f.self_check + "\n" if f.self_check else "") + capped
     incident.responsible, incident.evidence, incident.confidence = (
         f.responsible, f.evidence, f.confidence)
     record(session, incident.id, "finding",

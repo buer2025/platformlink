@@ -55,6 +55,7 @@ export type Incident = {
   related_messages: number
   workflow_id: number | null
   lookup_result: string
+  evidence_checks: { key: string; label: string; state: 'ok' | 'warn' | 'missing'; detail: string }[]
   knowledge_ids: number[]
   resolved_at: string | null
   escalated_at: string | null

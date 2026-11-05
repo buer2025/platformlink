@@ -211,6 +211,8 @@ class Incident(Base):
     sla_alerted_message_id: Mapped[int | None] = mapped_column(Integer)
     # 长对话压缩：较早的客户消息压成摘要，conv_summary_upto 之前（含）的消息已并入摘要
     conv_summary: Mapped[str] = mapped_column(Text, default="")
+    # 证据清单：[{key,label,state(ok/warn/missing),detail}]，决定准确率上限
+    evidence_checks: Mapped[list[dict]] = mapped_column(JSON, default=list)
     conv_summary_upto: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 

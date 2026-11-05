@@ -89,6 +89,7 @@ class IncidentOut(BaseModel):
     related_messages: int
     workflow_id: int | None
     lookup_result: str
+    evidence_checks: list[dict] = []
     knowledge_ids: list[int]
     resolved_at: datetime | None
     escalated_at: datetime | None

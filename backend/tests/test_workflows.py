@@ -195,7 +195,8 @@ async def test_agent_tool_loop(client, fake, logdb, monkeypatch):  # noqa: F811
     await client.post("/api/webhooks/telegram", headers=TG,
                       json=tg(100, 14, "seedance 报错 503"))
     inc = (await client.get("/api/incidents")).json()[0]
-    assert inc["responsible"] == "supplier" and inc["confidence"] == 92
+    # 只有一项直接证据（报障时段日志），横向对比缺失 → 准确率按证据封顶到 80
+    assert inc["responsible"] == "supplier" and inc["confidence"] == 80
     assert inc["supplier_group_id"] == sid  # 由工具查到的渠道 7 路由
     ev = (await client.get(f"/api/incidents/{inc['id']}/events")).json()
     tools = [e["text"].split("(")[0] for e in ev if e["kind"] == "tool"]

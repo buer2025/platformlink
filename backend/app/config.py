@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     # 日志库（new-api 结构，只读账号），例如 mysql+aiomysql://ro:pwd@host:3306/new-api
     # 为空时链路中的数据查询步骤会跳过
     log_database_url: str = ""
+    # new-api 管理接口（可选）：用于排查时实时测试上游渠道（GET /api/channel/test/{id}）
+    newapi_base_url: str = ""
+    newapi_admin_token: str = ""  # new-api 个人设置里生成的系统访问令牌（管理员）
+    newapi_admin_user_id: int = 0  # 新版 new-api 需要 New-Api-User 头
     # Webhook 校验
     telegram_webhook_secret: str = ""  # setWebhook 的 secret_token
     feishu_verification_token: str = ""
