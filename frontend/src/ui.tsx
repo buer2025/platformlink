@@ -97,8 +97,8 @@ export function TagInput({ value, onChange, placeholder, tone = 'slate' }: {
       <AnimatePresence initial={false}>
         {value.map((v) => (
           <motion.span key={v} layout initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.8 }} transition={spring}>
-            <Badge tone={tone}>
+            exit={{ opacity: 0, scale: 0.8 }} transition={spring} className="max-w-full">
+            <Badge tone={tone} className="h-auto min-h-5 max-w-full py-0.5 leading-snug whitespace-normal">
               {v}
               <button type="button" aria-label={`移除 ${v}`} className="-mr-0.5 ml-0.5 opacity-60 hover:opacity-100"
                 onClick={() => onChange(value.filter((x) => x !== v))}><X size={11} /></button>
