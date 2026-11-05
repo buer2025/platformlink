@@ -7,8 +7,7 @@ from datetime import timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent import llm
-from app.agent.logs import query_log
+from app.agent import harness, llm, logs
 from app.config import settings
 from app.im.base import InboundMessage
 from app.models import (
@@ -20,8 +19,10 @@ from app.models import (
     Message,
     Platform,
     Staff,
+    Workflow,
 )
-from app.services import presend
+from app.services import knowledge, presend
+from app.services.events import record
 
 log = logging.getLogger(__name__)
 
@@ -44,10 +45,35 @@ async def upsert_group(session: AsyncSession, m: InboundMessage) -> Group:
     return group
 
 
-async def find_supplier_group(session: AsyncSession, model: str) -> Group | None:
+DEFAULT_LOOKUPS = ["request_id", "recent_errors", "channel"]
+
+
+async def match_workflow(session: AsyncSession, group: Group, category: str,
+                         text: str) -> Workflow | None:
+    """按优先级找第一条命中的链路：类别或关键词任一命中，且群标识满足限定。"""
+    rows = (await session.scalars(select(Workflow).where(Workflow.enabled.is_(True))
+                                  .order_by(Workflow.priority, Workflow.id))).all()
+    tags = set(group.tags or [])
+    low = text.lower()
+    for w in rows:
+        if w.group_tags and not tags & set(w.group_tags):
+            continue
+        if category in (w.categories or []) or any(
+                k and k.lower() in low for k in (w.keywords or [])):
+            return w
+    return None
+
+
+async def find_supplier_group(session: AsyncSession, model: str,
+                              channel_ids: list[int] | None = None) -> Group | None:
+    groups = (await session.scalars(select(Group).where(Group.kind == GroupKind.supplier))).all()
+    # 日志里定位到的渠道最准确，优先按渠道找
+    for ch in channel_ids or []:
+        for g in groups:
+            if ch in (g.channel_ids or []):
+                return g
     if not model:
         return None
-    groups = (await session.scalars(select(Group).where(Group.kind == GroupKind.supplier))).all()
     for g in groups:
         if any(model.lower().startswith(x.lower()) for x in g.models):
             return g
@@ -75,6 +101,8 @@ async def _handle_supplier_reply(session: AsyncSession, group: Group, msg: Messa
     if not incident or incident.status == IncidentStatus.resolved:
         return
     msg.incident_id = incident.id
+    record(session, incident.id, "supplier_reply", f"{group.name} / {msg.sender}：{msg.text}",
+           actor=msg.sender)
     incident.supplier_replied_at = presend.utcnow()
     incident.supplier_last_reply = msg.text[:2000]
     if RESOLVED_HINT.search(msg.text):
@@ -127,44 +155,72 @@ async def handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident |
     if existing := await _mergeable(session, group, c.category):
         existing.related_messages += 1
         msg.incident_id = existing.id
+        record(session, existing.id, "merged", f"{m.sender}：{m.text}", actor=m.sender)
         if c.request_id and not existing.request_id:
             existing.request_id = c.request_id
         await session.commit()
         return existing
 
+    wf = await match_workflow(session, group, c.category, m.text)
     incident = Incident(group_id=group.id, message_id=msg.id, category=c.category, model=c.model,
                         request_id=c.request_id, summary=c.summary,
+                        workflow_id=wf.id if wf else None,
                         status=IncidentStatus.investigating)
     session.add(incident)
     await session.flush()
     msg.incident_id = incident.id
+    record(session, incident.id, "created", f"{m.sender}：{m.text}", actor=m.sender)
+    record(session, incident.id, "classified",
+           f"类别 {c.category}，模型 {c.model or '未知'}，request_id {c.request_id or '无'}；"
+           f"链路：{wf.name if wf else '默认'}")
+    force_confirm = bool(wf and wf.automation == "confirm")
 
     ack = await llm.stylize("收到，正在排查，稍等～", group.style, "ack")
     await presend.enqueue(session, group, ack, 100, "ack", incident.id, reply_to=m.message_id)
 
-    try:
-        lr = await query_log(c.request_id) if c.request_id else None
-    except Exception:
-        log.exception("query_log failed")
-        lr = None
-    f = await llm.investigate(c, lr)
+    steps = wf.lookups if wf else DEFAULT_LOOKUPS
+    ev = await logs.lookup(steps, c.request_id, group.api_users or [], c.model)
+    incident.lookup_result = ev.text
+    record(session, incident.id, "lookup", ev.text)
+
+    kb = await knowledge.search(session, f"{m.text}\n{ev.text}", c.model)
+    if kb:
+        for k in kb:
+            k.hits += 1
+        record(session, incident.id, "knowledge",
+               "参考知识：" + "；".join(f"#{k.id} {k.title}" for k in kb))
+    instructions = wf.instructions if wf else ""
+    preloaded = ev.text + (f"\n\n## 知识库命中\n{knowledge.as_prompt(kb)}" if kb else "")
+    ctx = harness.Ctx(session=session, group=group, incident=incident, c=c, found=ev.found,
+                      channel_ids=list(ev.channel_ids), knowledge_ids=[k.id for k in kb])
+    f = await harness.run(ctx, instructions, preloaded)
+    if f is None:  # 无 Key / 调用失败：单次判断或规则兜底
+        f = await llm.investigate(c, ev.text, instructions, ev.found, knowledge.as_prompt(kb))
+    incident.knowledge_ids = ctx.knowledge_ids
+    ev.channel_ids = ctx.channel_ids
     incident.responsible, incident.evidence, incident.confidence = (
         f.responsible, f.evidence, f.confidence)
+    record(session, incident.id, "finding",
+           f"责任方 {f.responsible}，准确率 {f.confidence}：{f.evidence}"
+           + (f"\n自检：{f.self_check}" if f.self_check else ""))
 
     reply = await llm.stylize(f.customer_reply, group.style, "customer_reply")
     await presend.enqueue(session, group, reply, f.confidence, "customer_reply", incident.id,
-                          reply_to=m.message_id)
+                          reply_to=m.message_id, force_confirm=force_confirm)
 
-    if f.responsible == "supplier" and f.supplier_note:
-        supplier = await find_supplier_group(session, c.model)
+    route = wf.route_supplier if wf else True
+    if f.responsible == "supplier" and f.supplier_note and route:
+        supplier = await find_supplier_group(session, c.model, ev.channel_ids)
         if supplier:
             incident.supplier_group_id = supplier.id
             incident.status = IncidentStatus.waiting_supplier
             note = await llm.stylize(f.supplier_note, supplier.style, "supplier_ticket")
             await presend.enqueue(session, supplier, note, f.confidence, "supplier_ticket",
-                                  incident.id, mentions=supplier.contacts)
+                                  incident.id, mentions=supplier.contacts,
+                                  force_confirm=force_confirm)
         else:
-            incident.evidence += "\n（未找到标记了该模型的供应商群，需人工转交）"
+            incident.evidence += "\n（未找到对应的供应商群，需人工转交）"
+            record(session, incident.id, "no_supplier", "未找到对应的供应商群，需人工转交")
 
     await session.commit()
     return incident

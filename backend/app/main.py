@@ -12,6 +12,7 @@ from app.api.routes import admin, public
 from app.config import settings
 from app.db import SessionLocal, run_migrations
 from app.services.presend import flush_due, recover_stuck, remind_suppliers
+from app.services.seed import seed_defaults
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("platformlink")
@@ -36,6 +37,7 @@ async def lifespan(_: FastAPI):
     await asyncio.to_thread(run_migrations)
     async with SessionLocal() as s:
         await recover_stuck(s)
+        await seed_defaults(s)
     tasks = [asyncio.create_task(scheduler())]
     if settings.telegram_mode == "polling" and settings.telegram_bot_token:
         from app.im.telegram_poll import poll_forever

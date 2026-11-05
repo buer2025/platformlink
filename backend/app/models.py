@@ -75,6 +75,48 @@ class Group(Base):
     extra_delay_seconds: Mapped[int] = mapped_column(Integer, default=0)
     owner: Mapped[str] = mapped_column(String(100), default="")
     backup_owner: Mapped[str] = mapped_column(String(100), default="")
+    # 自由标识，例如 ["VIP", "视频", "海外"]；链路可按标识限定适用的群
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # 与日志库（new-api）的对应关系：客户群 → 用户 ID/用户名；供应商群 → 渠道 ID
+    api_users: Mapped[list[str]] = mapped_column(JSON, default=list)
+    channel_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Workflow(Base):
+    """链路：一类问题从识别到处理的规则，由管理员创建。"""
+
+    __tablename__ = "workflows"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    enabled: Mapped[bool] = mapped_column(default=True)
+    priority: Mapped[int] = mapped_column(Integer, default=100)  # 小的先匹配
+    # 触发条件：分诊类别（error / rate_limit / usage_request / ...）或关键词，命中任意一项
+    categories: Mapped[list[str]] = mapped_column(JSON, default=list)
+    keywords: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # 只对带这些标识的群生效；为空表示所有客户群
+    group_tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # 数据查询步骤：request_id / recent_errors / usage / channel
+    lookups: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # 给 Agent 的处理说明（这条链路怎么判断、怎么回复）
+    instructions: Mapped[str] = mapped_column(Text, default="")
+    # 判定为供应商问题时是否转交供应商群
+    route_supplier: Mapped[bool] = mapped_column(default=True)
+    # 覆盖群的自动化策略：""（沿用群设置）/ confirm（一律人工确认）
+    automation: Mapped[str] = mapped_column(String(20), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class IncidentEvent(Base):
+    """事件时间线：每一步处理都记一条，用于跟踪。"""
+
+    __tablename__ = "incident_events"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(50))
+    text: Mapped[str] = mapped_column(Text, default="")
+    actor: Mapped[str] = mapped_column(String(100), default="agent")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
@@ -105,6 +147,7 @@ class Incident(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     group_id: Mapped[int] = mapped_column(ForeignKey("groups.id"))
     message_id: Mapped[int] = mapped_column(ForeignKey("messages.id"))
+    workflow_id: Mapped[int | None] = mapped_column(ForeignKey("workflows.id"))
     category: Mapped[str] = mapped_column(String(50))  # error / rate_limit / other
     model: Mapped[str] = mapped_column(String(100), default="")
     request_id: Mapped[str] = mapped_column(String(200), default="")
@@ -122,6 +165,10 @@ class Incident(Base):
     supplier_last_reply: Mapped[str] = mapped_column(Text, default="")
     reminders: Mapped[int] = mapped_column(Integer, default=0)
     related_messages: Mapped[int] = mapped_column(Integer, default=1)
+    # 数据查询结果快照（给人看，也用于复盘）
+    lookup_result: Mapped[str] = mapped_column(Text, default="")
+    knowledge_ids: Mapped[list[int]] = mapped_column(JSON, default=list)  # 本次参考的知识
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
@@ -153,3 +200,24 @@ class Outbound(Base):
     error: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Knowledge(Base):
+    """知识沉淀：处理过的问题总结成经验，Agent 排查时自动检索参考。"""
+
+    __tablename__ = "knowledge"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(200))
+    # 现象：报错原文、错误码、客户描述等，用于匹配
+    symptoms: Mapped[str] = mapped_column(Text, default="")
+    keywords: Mapped[list[str]] = mapped_column(JSON, default=list)
+    models: Mapped[list[str]] = mapped_column(JSON, default=list)
+    responsible: Mapped[str] = mapped_column(String(20), default="")
+    root_cause: Mapped[str] = mapped_column(Text, default="")
+    solution: Mapped[str] = mapped_column(Text, default="")
+    reply_template: Mapped[str] = mapped_column(Text, default="")
+    source_incident_id: Mapped[int | None] = mapped_column(ForeignKey("incidents.id"))
+    hits: Mapped[int] = mapped_column(Integer, default=0)
+    enabled: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)

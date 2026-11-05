@@ -1,6 +1,7 @@
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models import AutomationMode, GroupKind, IncidentStatus, OutboundStatus, Platform
 
@@ -21,6 +22,9 @@ class GroupOut(BaseModel):
     extra_delay_seconds: int
     owner: str
     backup_owner: str
+    tags: list[str]
+    api_users: list[str]
+    channel_ids: list[int]
 
 
 class GroupUpdate(BaseModel):
@@ -35,6 +39,9 @@ class GroupUpdate(BaseModel):
     extra_delay_seconds: int | None = None
     owner: str | None = None
     backup_owner: str | None = None
+    tags: list[str] | None = None
+    api_users: list[str] | None = None
+    channel_ids: list[int] | None = None
 
 
 class PartyIn(BaseModel):
@@ -76,6 +83,10 @@ class IncidentOut(BaseModel):
     supplier_last_reply: str
     reminders: int
     related_messages: int
+    workflow_id: int | None
+    lookup_result: str
+    knowledge_ids: list[int]
+    resolved_at: datetime | None
     created_at: datetime
 
 
@@ -124,3 +135,62 @@ class StaffOut(StaffIn):
 class IncidentUpdate(BaseModel):
     status: IncidentStatus | None = None
     responsible: str | None = None
+    note: str = ""  # 人工备注，写入时间线
+    actor: str = ""
+
+
+class IncidentEventOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    kind: str
+    text: str
+    actor: str
+    created_at: datetime
+
+
+class WorkflowIn(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    description: str = ""
+    enabled: bool = True
+    priority: int = 100
+    categories: list[str] = []
+    keywords: list[str] = []
+    group_tags: list[str] = []
+    lookups: list[Literal["request_id", "recent_errors", "usage", "channel"]] = []
+    instructions: str = ""
+    route_supplier: bool = True
+    automation: Literal["", "confirm"] = ""
+
+
+class WorkflowOut(WorkflowIn):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+
+
+class LookupTest(BaseModel):
+    request_id: str = ""
+    api_users: list[str] = []
+    model: str = ""
+    lookups: list[Literal["request_id", "recent_errors", "usage", "channel"]] = [
+        "request_id", "recent_errors", "usage", "channel"]
+
+
+class KnowledgeIn(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    symptoms: str = ""
+    keywords: list[str] = []
+    models: list[str] = []
+    responsible: str = ""
+    root_cause: str = ""
+    solution: str = ""
+    reply_template: str = ""
+    source_incident_id: int | None = None
+    enabled: bool = True
+
+
+class KnowledgeOut(KnowledgeIn):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    hits: int
+    created_at: datetime
+    updated_at: datetime

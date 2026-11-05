@@ -13,6 +13,9 @@ class Settings(BaseSettings):
 
     # 后台登录口令（必须配置；为空时拒绝所有后台请求）
     admin_token: str = ""
+    # 日志库（new-api 结构，只读账号），例如 mysql+aiomysql://ro:pwd@host:3306/new-api
+    # 为空时链路中的数据查询步骤会跳过
+    log_database_url: str = ""
     # Webhook 校验
     telegram_webhook_secret: str = ""  # setWebhook 的 secret_token
     feishu_verification_token: str = ""
