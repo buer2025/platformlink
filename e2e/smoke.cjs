@@ -82,8 +82,11 @@ async function api(path, body, method) {
 
   // 事件中心
   await page.getByRole('link', { name: '事件中心' }).click()
-  await page.getByText('429 限流').first().waitFor()
-  await page.getByText('429 限流').first().click()
+  // 等页面切换动画结束（旧页面卸载）再点击，避免点到正在退出的预发队列
+  await page.getByRole('heading', { name: '事件中心' }).waitFor()
+  const row = page.locator('button[data-row]').filter({ hasText: '429 限流' }).first()
+  await row.waitFor()
+  await row.click()
   await page.getByText('req-e2e-0001', { exact: true }).waitFor()
   check(true, '事件详情显示 request_id')
   await page.getByText('日志预查询').waitFor()
