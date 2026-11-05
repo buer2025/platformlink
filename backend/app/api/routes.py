@@ -50,9 +50,10 @@ from app.schemas import (
     WorkflowIn,
     WorkflowOut,
 )
-from app.services import knowledge, memory, pipeline, presend
+from app.services import knowledge, memory, pipeline, presend, stats
 from app.services.events import record
 from app.services.pipeline import handle_inbound
+from app.services.style import style_of
 
 admin = APIRouter(prefix="/api", dependencies=[Depends(require_admin)])
 public = APIRouter(prefix="/api")
@@ -119,7 +120,9 @@ async def preview_group_style(group_id: int, body: StylePreviewIn, s: AsyncSessi
     g = await s.get(Group, group_id)
     if not g:
         raise HTTPException(404, "群不存在")
-    style = body.style if body.style is not None else (g.style or {})
+    style = body.style if body.style is not None else await style_of(s, g)
+    if body.style is not None and (fixes := (await style_of(s, g)).get("corrections")):
+        style = {**style, "corrections": fixes}
     return {"text": await llm.stylize(body.text, style, "customer_reply")}
 
 
@@ -190,10 +193,15 @@ async def ai_draft(group_id: int, body: DraftIn, s: AsyncSession = Session):
                                 .order_by(Message.id.desc()).limit(15))).all()
         context = "\n".join(f"{'[我方]' if m.from_us else '[客户]'} {m.text}" for m in reversed(rows))
     intent = body.intent.strip() or "根据当前进展，回复客户最新的消息"
-    text = await llm.compose(intent, context, g.style or {}, body.intent.strip() or "")
+    text = await llm.compose(intent, context, await style_of(s, g), body.intent.strip() or "")
     if not text:
         raise HTTPException(503, "AI 暂时不可用")
     return {"text": text}
+
+
+@admin.get("/stats")
+async def get_stats(days: int = 7, s: AsyncSession = Session):
+    return await stats.overview(s, max(1, min(days, 90)))
 
 
 @admin.get("/parties", response_model=list[PartyOut])
@@ -333,6 +341,7 @@ async def _get(s: AsyncSession, outbound_id: int, allowed=presend.OPEN) -> Outbo
 @admin.post("/outbound/{outbound_id}/send", response_model=OutboundOut)
 async def send_now(outbound_id: int, s: AsyncSession = Session):
     o = await _get(s, outbound_id, presend.RETRYABLE)
+    o.sent_by = "approved"
     if not await presend.deliver(s, o, presend.RETRYABLE):
         await s.refresh(o)
         if o.status != OutboundStatus.failed:

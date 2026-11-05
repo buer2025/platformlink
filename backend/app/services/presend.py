@@ -19,6 +19,7 @@ from app.models import (
     OutboundStatus,
 )
 from app.services.events import PURPOSE_NAMES, record
+from app.services.style import style_of
 
 log = logging.getLogger(__name__)
 OPEN = (OutboundStatus.pending, OutboundStatus.needs_approval)
@@ -70,6 +71,7 @@ async def enqueue(
         if inc and inc.human_until and aware(inc.human_until) > utcnow():
             delay, takeover = None, f"，{inc.human_by or '同事'}正在人工处理"  # 人工接管期间 AI 不自动发
     item = Outbound(
+        original_text=text if purpose != "manual" else "",
         group_id=group.id,
         incident_id=incident_id,
         purpose=purpose,
@@ -119,6 +121,8 @@ async def deliver(session: AsyncSession, item: Outbound, allowed=OPEN) -> bool:
         return False
     item.status = OutboundStatus.sent
     item.sent_at = utcnow()
+    if not item.sent_by:
+        item.sent_by = "manual" if item.purpose == "manual" else ("auto" if allowed == OPEN else "approved")
     item.error = ""
     # 人工从后台发的消息记成那位同事（用于风格学习）；AI 发的记为 platformlink
     sender = f"后台·{item.edited_by}" if item.purpose == "manual" and item.edited_by else "platformlink"
@@ -156,7 +160,7 @@ async def remind_suppliers(session: AsyncSession) -> int:
         text = await llm.compose(
             "客气地催一下供应商处理上面转交的问题，客户那边还在等",
             f"问题: {inc.summary}\n已转交 {settings.supplier_remind_minutes * (inc.reminders + 1)} 分钟，"
-            f"这是第 {inc.reminders + 1} 次催", supplier.style, "麻烦帮忙看下上面这个问题，客户那边还在等，辛苦～")
+            f"这是第 {inc.reminders + 1} 次催", await style_of(session, supplier), "麻烦帮忙看下上面这个问题，客户那边还在等，辛苦～")
         ticket = await session.scalar(select(Message).where(
             Message.incident_id == inc.id, Message.group_id == supplier.id,
             Message.from_us.is_(True)).order_by(Message.id))

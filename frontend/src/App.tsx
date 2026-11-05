@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import { Command } from 'cmdk'
 import {
-  BookOpen, Inbox, LogOut, Monitor, Moon, Search, Sun, Users, Workflow as WorkflowIcon, Zap, MessagesSquare,
+  BarChart3, BookOpen, Inbox, LogOut, Monitor, Moon, Search, Sun, Users, Workflow as WorkflowIcon, Zap, MessagesSquare,
   Keyboard,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
@@ -14,6 +14,7 @@ import { useHotkeys, useTheme } from './hooks'
 import Login from './pages/Login'
 import Presend from './pages/Presend'
 const Workflows = lazy(() => import('./pages/Workflows'))
+const StatsPage = lazy(() => import('./pages/Stats'))
 const StaffPage = lazy(() => import('./pages/Staff'))
 const KnowledgePage = lazy(() => import('./pages/Knowledge'))
 const Incidents = lazy(() => import('./pages/Incidents'))
@@ -37,11 +38,12 @@ const NAV: { to: string; label: string; icon: ReactNode; key: string }[] = [
   { to: '/knowledge', label: '知识库', icon: <BookOpen size={16} />, key: 'k' },
   { to: '/groups', label: '群与标记', icon: <MessagesSquare size={16} />, key: 'g' },
   { to: '/staff', label: '我方人员', icon: <Users size={16} />, key: 's' },
+  { to: '/stats', label: '数据看板', icon: <BarChart3 size={16} />, key: 'd' },
 ]
 
 const SHORTCUTS: [string, string[]][] = [
   ['打开命令面板', ['⌘', 'K']],
-  ['跳转页面', ['G', '然后 P / I / W / K / G / S']],
+  ['跳转页面', ['G', '然后 P / I / W / K / G / S / D']],
   ['上下移动', ['J', 'K']],
   ['打开详情', ['Enter']],
   ['立即发送', ['⌘', 'Enter']],
@@ -238,6 +240,7 @@ function Shell() {
                 <Route path="/knowledge" element={<KnowledgePage />} />
                 <Route path="/groups" element={<Groups />} />
                 <Route path="/staff" element={<StaffPage />} />
+                <Route path="/stats" element={<StatsPage />} />
                 <Route path="*" element={<Navigate to="/presend" replace />} />
               </Routes>
               </Suspense>

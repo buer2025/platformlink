@@ -13,6 +13,7 @@ class InboundMessage:
     reply_to_message_id: str = ""
     mentions: list[str] = field(default_factory=list)
     is_bot: bool = False
+    image_ids: list[str] = field(default_factory=list)  # 平台图片 ID（截图），按需下载识别
 
 
 class IMAdapter(Protocol):
@@ -25,3 +26,6 @@ class IMAdapter(Protocol):
         self, chat_id: str, text: str, reply_to: str = "", mentions: list[str] | None = None
     ) -> str:
         """发送消息，返回平台消息 ID。"""
+
+    async def fetch_image(self, image_id: str) -> tuple[bytes, str] | None:
+        """下载图片，返回 (内容, MIME)；不支持的平台返回 None。"""

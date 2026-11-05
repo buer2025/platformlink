@@ -297,7 +297,7 @@ export function Avatar({ name, size = 36, square }: { name: string; size?: numbe
 
 /** 统计卡：大数字 + 一句话。 */
 export function Stat({ label, value, hint, tone = 'slate', icon, active, onClick }: {
-  label: string; value: number; hint?: string; tone?: Tone; icon?: ReactNode; active?: boolean; onClick?: () => void
+  label: string; value: number | string; hint?: string; tone?: Tone; icon?: ReactNode; active?: boolean; onClick?: () => void
 }) {
   const color: Record<Tone, string> = {
     slate: 'text-fg-3', accent: 'text-accent', ok: 'text-ok', warn: 'text-warn', bad: 'text-bad', info: 'text-info', violet: 'text-violet',

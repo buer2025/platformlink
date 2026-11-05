@@ -234,6 +234,9 @@ def describe_style(style: dict) -> str:
         v = style.get(k)
         if v:
             lines.append(f"- {name}：{'、'.join(v) if isinstance(v, list) else v}")
+    if fixes := style.get("corrections"):
+        lines.append("- 同事修改过 AI 原稿的例子（最重要：照着同事的改法调整措辞、长度和语气）：")
+        lines += [f"  · AI：{x['ai'][:160]}\n    同事改成：{x['human'][:160]}" for x in fixes]
     if samples := style.get("samples"):
         lines.append("- 我方在这个群的真实发言（模仿它们的句式、长度和口吻）：")
         lines += [f"  · {x}" for x in samples[:6]]
@@ -294,6 +297,34 @@ async def compose(intent: str, context: str, style: dict, fallback: str) -> str:
         return r.text.strip()
     address = (style or {}).get("address")
     return f"{address}，{fallback}" if address and address not in fallback else fallback
+
+
+class ImageReading(BaseModel):
+    is_error: bool = Field(description="截图里是否是报错 / 异常信息")
+    text: str = Field(description="截图里与问题相关的文字，尽量原样摘录：报错信息、状态码、request_id、模型名、时间")
+
+
+async def read_image(data: bytes, mime: str) -> str:
+    """识别客户发来的截图（报错弹窗、控制台、日志），返回摘录的文字；失败返回空。"""
+    import base64
+    client = _client()
+    if client is None:
+        return ""
+    try:
+        resp = await client.messages.parse(
+            model=settings.anthropic_model, max_tokens=1500,
+            system="你在帮技术支持看客户发来的截图。原样摘录与问题相关的文字，特别是报错信息、状态码、"
+                   "request_id、模型名和时间；不相关的界面文字忽略，不要推测。",
+            messages=[{"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": mime,
+                                             "data": base64.b64encode(data).decode()}},
+                {"type": "text", "text": "请摘录这张截图里与问题相关的文字。"}]}],
+            output_format=ImageReading, output_config={"effort": "low"})
+    except (anthropic.APIError, ValueError):
+        log.exception("截图识别失败")
+        return ""
+    r = resp.parsed_output
+    return r.text.strip() if r else ""
 
 
 async def stylize(text: str, style: dict, purpose: str) -> str:

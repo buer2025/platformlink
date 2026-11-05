@@ -203,6 +203,10 @@ class Outbound(Base):
     status: Mapped[OutboundStatus] = mapped_column(Enum(OutboundStatus))
     send_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     edited_by: Mapped[str] = mapped_column(String(100), default="")
+    # AI 原稿（被人工修改过时与 text 不同，用来学习同事的改法）
+    original_text: Mapped[str] = mapped_column(Text, default="")
+    # 怎么发出去的：auto（倒计时自动）/ approved（人工点发送）/ manual（人工撰写）
+    sent_by: Mapped[str] = mapped_column(String(20), default="")
     error: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

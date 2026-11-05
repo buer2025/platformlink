@@ -1,7 +1,9 @@
 """入站消息处理：存储 → 识别问题 → 排查 → 进入预发队列；供应商回复关联转交单。"""
 
+import asyncio
 import logging
 import re
+from collections import defaultdict
 from datetime import timedelta
 
 from sqlalchemy import func, select
@@ -27,6 +29,7 @@ from app.models import (
 from app.services import knowledge, memory, presend
 from app.services.escalation import escalate
 from app.services.events import record
+from app.services.style import style_of
 
 log = logging.getLogger(__name__)
 
@@ -115,7 +118,7 @@ async def _handle_supplier_reply(session: AsyncSession, group: Group, msg: Messa
         text = await llm.compose(
             "告诉客户上游已经处理好了，请他再试一下，有问题随时说",
             f"客户最初的问题: {incident.summary}\n供应商刚才的回复: {msg.text}",
-            customer.style, "上游反馈已经处理好了，麻烦再试一下，有问题随时说～")
+            await style_of(session, customer), "上游反馈已经处理好了，麻烦再试一下，有问题随时说～")
         # 供应商说修好，需人工复核或 10 分钟倒计时后通知客户
         await presend.enqueue(session, customer, text, 75, "customer_reply", incident.id,
                               reply_to=origin.external_id if origin else "")
@@ -215,7 +218,7 @@ async def _investigate(session: AsyncSession, group: Group, incident: Incident,
     if newest > seen:  # 排查期间客户又发了消息 → 一次性回复全部
         reply = await llm.integrate(reply, conv2, _progress(incident))
         record(session, incident.id, "integrated", "排查期间客户追加了消息，回复已整合为一条")
-    reply = await llm.stylize(reply, group.style, "customer_reply")
+    reply = await llm.stylize(reply, await style_of(session, group), "customer_reply")
     await presend.enqueue(session, group, reply, f.confidence, "customer_reply", incident.id,
                           reply_to=latest or reply_to, force_confirm=force_confirm)
 
@@ -226,7 +229,7 @@ async def _investigate(session: AsyncSession, group: Group, incident: Incident,
         if supplier:
             incident.supplier_group_id = supplier.id
             incident.status = IncidentStatus.waiting_supplier
-            note = await llm.stylize(f.supplier_note, supplier.style, "supplier_ticket")
+            note = await llm.stylize(f.supplier_note, await style_of(session, supplier), "supplier_ticket")
             await presend.enqueue(session, supplier, note, f.confidence, "supplier_ticket",
                                   incident.id, mentions=supplier.contacts,
                                   force_confirm=force_confirm)
@@ -272,7 +275,7 @@ async def _respond_followup(session: AsyncSession, group: Group, incident: Incid
     last = replies[0] if replies else None
     if last and last.status in presend.RETRYABLE and incident.status != IncidentStatus.resolved:
         text = await llm.integrate(last.text, conv, _progress(incident))
-        text = await llm.stylize(text, group.style, "customer_reply")
+        text = await llm.stylize(text, await style_of(session, group), "customer_reply")
         last.status = OutboundStatus.cancelled
         await presend.enqueue(session, group, text, last.score, "customer_reply", incident.id,
                               reply_to=latest, force_confirm=force_confirm)
@@ -291,7 +294,7 @@ async def _respond_followup(session: AsyncSession, group: Group, incident: Incid
     if not d.should_reply or not d.text:
         record(session, incident.id, "no_reply", f"「{m.text}」无需回复：{d.reason}")
         return
-    text = await llm.stylize(d.text, group.style, "customer_reply")
+    text = await llm.stylize(d.text, await style_of(session, group), "customer_reply")
     await presend.enqueue(session, group, text, min(incident.confidence, 85), "customer_reply",
                           incident.id, reply_to=m.message_id, force_confirm=force_confirm)
     record(session, incident.id, "followup", f"客户{'引用消息' if quoted else ''}追问，已起草跟进回复：{d.reason}")
@@ -348,7 +351,61 @@ async def _handle_quote(session: AsyncSession, group: Group, msg: Message, m: In
     return incident
 
 
+# 同一个群的消息严格按顺序处理：排查要十几秒，期间同群的新消息排队，
+# 等前一条处理完再合并 / 整合，避免并发改写同一条回复。（单进程部署）
+_group_locks: dict[tuple[str, str], asyncio.Lock] = defaultdict(asyncio.Lock)
+
+
 async def handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident | None:
+    async with _group_locks[(m.platform, m.chat_id)]:
+        try:
+            return await _handle_inbound(session, m)
+        except Exception as e:
+            log.exception("处理消息失败 %s/%s", m.platform, m.chat_id)
+            await session.rollback()
+            await _on_failure(session, m, e)
+            return None
+
+
+async def _on_failure(session: AsyncSession, m: InboundMessage, err: Exception) -> None:
+    """处理出错时不能让客户石沉大海：记到事件上并 @ 负责人。"""
+    try:
+        group = await session.scalar(select(Group).where(
+            Group.platform == m.platform, Group.external_id == m.chat_id))
+        if group is None or group.kind != GroupKind.customer:
+            return
+        incident = await _active_incident(session, group)
+        if incident is None:
+            return
+        record(session, incident.id, "error", f"处理「{m.text[:80]}」时出错：{type(err).__name__}", actor="system")
+        incident.escalated_at = None
+        await escalate(session, group, incident, f"系统处理客户消息出错（{type(err).__name__}），请人工跟进")
+        await session.commit()
+    except Exception:
+        log.exception("failure fallback failed")
+        await session.rollback()
+
+
+async def _read_images(m: InboundMessage) -> None:
+    """把截图里的文字（报错、request_id）并进消息正文，后续分诊 / 排查都能用上。"""
+    from app.im.registry import get_adapter
+    readings = []
+    for image_id in m.image_ids[:3]:
+        try:
+            img = await get_adapter(m.platform).fetch_image(image_id)
+        except Exception:
+            log.exception("下载图片失败")
+            continue
+        if img and (txt := await llm.read_image(*img)):
+            readings.append(txt)
+    if readings:
+        base = "" if m.text == "[图片]" else m.text + "\n"
+        m.text = base + "\n".join(f"[截图内容] {r}" for r in readings)
+
+
+async def _handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident | None:
+    if m.image_ids and not m.is_bot:
+        await _read_images(m)
     group = await upsert_group(session, m)
     if m.message_id and await session.scalar(select(Message.id).where(
             Message.group_id == group.id, Message.external_id == m.message_id)):
@@ -423,7 +480,7 @@ async def handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident |
 
     ack = await llm.compose(
         "先回应客户这条消息（共情他的着急），告诉他收到了、这就去查。不要猜原因，也不要说「还没头绪 / 还没看出原因」",
-        f"客户刚发的消息: {m.text}", group.style, "收到，正在排查，稍等～")
+        f"客户刚发的消息: {m.text}", await style_of(session, group), "收到，正在排查，稍等～")
     await presend.enqueue(session, group, ack, 100, "ack", incident.id, reply_to=m.message_id)
     await session.commit()
 

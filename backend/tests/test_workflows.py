@@ -506,3 +506,103 @@ async def test_ai_draft(client, fake, monkeypatch):  # noqa: F811
     r = await client.post(f"/api/groups/{cid}/draft", json={"incident_id": inc["id"], "intent": "告诉他在扩容"})
     assert r.json()["text"] == "草稿" and seen["intent"] == "告诉他在扩容"
     assert "seedance 报错了" in seen["context"] and "处理进展" in seen["context"]
+
+
+async def test_same_group_messages_are_serialized(client, fake, monkeypatch):  # noqa: F811
+    """同群并发进来的两条：第二条等第一条排查完再处理 → 只有一个事件、一条待发回复。"""
+    import asyncio
+
+    from app.agent import llm
+    from app.db import SessionLocal
+    from app.im.telegram import TelegramAdapter
+    from app.services.pipeline import handle_inbound
+    await setup_groups(client)
+    real = llm.investigate
+
+    async def slow(*a, **kw):
+        await asyncio.sleep(0.3)
+        return await real(*a, **kw)
+    monkeypatch.setattr(llm, "investigate", slow)
+    ad = TelegramAdapter("x")
+
+    async def go(mid, text):
+        async with SessionLocal() as s:
+            await handle_inbound(s, ad.parse_webhook(tg(100, mid, text)))
+    await asyncio.gather(go(151, "seedance 报错了"), go(152, "seedance 还是报错，急"))
+    assert len((await client.get("/api/incidents")).json()) == 1
+    live = [o for o in await outbound(client) if o["purpose"] == "customer_reply" and o["status"] != "cancelled"]
+    assert len(live) == 1
+
+
+async def test_failure_escalates(client, fake, monkeypatch):  # noqa: F811
+    from app.agent import llm
+    cid, _ = await setup_groups(client)
+    await client.patch(f"/api/groups/{cid}", json={"owner": "zhang"})
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 161, "seedance 报错了"))
+
+    async def boom(*a, **kw):
+        raise RuntimeError("AI 挂了")
+    monkeypatch.setattr(llm, "classify", boom)
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 162, "怎么样了"))
+    inc = (await client.get("/api/incidents")).json()[0]
+    ev = [e["kind"] for e in (await client.get(f"/api/incidents/{inc['id']}/events")).json()]
+    assert "error" in ev
+    assert any(o["purpose"] == "escalation" for o in await outbound(client))
+
+
+async def test_learns_from_human_edits(client, fake):  # noqa: F811
+    """同事改过 AI 草稿再发出 → 记录改法，后续改写时作为参考；发送方式可统计。"""
+    from app.agent import llm
+    from app.db import SessionLocal
+    from app.models import Group
+    from app.services.style import style_of
+    cid, _ = await setup_groups(client)
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 171, "seedance 报错了"))
+    reply = next(o for o in await outbound(client) if o["purpose"] == "customer_reply")
+    await client.post(f"/api/outbound/{reply['id']}/edit", json={"text": "王总，这个我来看，稍等哈", "editor": "小王"})
+    sent = (await client.post(f"/api/outbound/{reply['id']}/send")).json()
+    assert sent["status"] == "sent"
+    async with SessionLocal() as s:
+        st = await style_of(s, await s.get(Group, cid))
+    assert st["corrections"][0]["human"] == "王总，这个我来看，稍等哈"
+    assert st["corrections"][0]["ai"] == reply["text"]
+    assert "同事改成：王总，这个我来看" in llm.describe_style(st)
+
+
+async def test_stats(client, fake):  # noqa: F811
+    await setup_groups(client)
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 181, "seedance 报错了"))
+    st = (await client.get("/api/stats")).json()
+    assert st["incidents"] == 1 and st["waiting"][0]["last_message"] == "seedance 报错了"
+    reply = next(o for o in await outbound(client) if o["purpose"] == "customer_reply")
+    await client.post(f"/api/outbound/{reply['id']}/send")
+    st = (await client.get("/api/stats")).json()
+    assert st["waiting"] == [] and st["replies_sent"] == 1 and st["ai_adopted"] == 1
+    assert st["first_response_median_min"] is not None and len(st["series"]) == 7
+
+
+async def test_screenshot_is_read_into_message(client, fake, monkeypatch):  # noqa: F811
+    """客户只发了一张报错截图：识别出的报错和 request_id 进入分诊与排查。"""
+    from app.agent import llm
+    from app.im.telegram import TelegramAdapter
+    await setup_groups(client)
+    p = TelegramAdapter("x").parse_webhook({"message": {
+        "message_id": 191, "chat": {"id": 100, "title": "群"}, "from": {"username": "alice"},
+        "photo": [{"file_id": "small"}, {"file_id": "big"}]}})
+    assert p.image_ids == ["big"] and p.text == "[图片]"
+
+    async def fetch(image_id):
+        assert image_id == "big"
+        return b"png", "image/png"
+    fake.fetch_image = fetch
+
+    async def read(data, mime):
+        return "Error 429: seedance rate limit exceeded, request_id: req-shot-1"
+    monkeypatch.setattr(llm, "read_image", read)
+    await client.post("/api/webhooks/telegram", headers=TG, json={"message": {
+        "message_id": 191, "chat": {"id": 100, "title": "群"}, "from": {"username": "alice"},
+        "photo": [{"file_id": "small"}, {"file_id": "big"}], "caption": "又这样了"}})
+    inc = (await client.get("/api/incidents")).json()[0]
+    assert inc["request_id"] == "req-shot-1" and inc["category"] == "rate_limit"
+    msgs = (await client.get(f"/api/incidents/{inc['id']}/messages")).json()
+    assert "又这样了" in msgs[0]["text"] and "[截图内容]" in msgs[0]["text"]

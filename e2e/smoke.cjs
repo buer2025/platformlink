@@ -159,6 +159,11 @@ async function api(path, body, method) {
   await page.getByText('该账号已存在').waitFor()
   check(true, '添加我方人员 + 重复校验')
 
+  // 数据看板
+  await page.getByRole('link', { name: '数据看板' }).click()
+  await page.getByText('AI 原稿采用率').waitFor()
+  check(await page.getByText('每天新事件').isVisible(), '数据看板')
+
   // 刷新保持登录、深链接
   await page.goto(BASE + '/groups')
   await page.getByText('客户A群').waitFor()
@@ -167,7 +172,7 @@ async function api(path, body, method) {
   // 手机端
   const phone = await browser.newPage({ viewport: { width: 375, height: 740 } })
   await phone.addInitScript((t) => localStorage.setItem('platformlink.token', t), TOKEN)
-  for (const p of ['/presend', '/incidents', '/workflows', '/knowledge', '/groups', '/staff']) {
+  for (const p of ['/presend', '/incidents', '/workflows', '/knowledge', '/groups', '/staff', '/stats']) {
     await phone.goto(BASE + p)
     await phone.waitForTimeout(600)
     const overflow = await phone.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
