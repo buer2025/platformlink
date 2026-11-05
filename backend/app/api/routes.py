@@ -25,6 +25,7 @@ from app.im.registry import get_adapter
 from app.models import (
     ApiSession,
     Group,
+    GroupKind,
     GroupMemory,
     Incident,
     IncidentEvent,
@@ -57,6 +58,7 @@ from app.schemas import (
     OutboundOut,
     PartyIn,
     PartyOut,
+    QuotaPushIn,
     SimulateIn,
     StaffIn,
     StaffOut,
@@ -67,7 +69,7 @@ from app.schemas import (
     WorkflowIn,
     WorkflowOut,
 )
-from app.services import knowledge, memory, pipeline, presend, stats
+from app.services import knowledge, memory, pipeline, presend, quota, stats
 from app.services.events import record
 from app.services.pipeline import handle_inbound
 from app.services.style import style_of
@@ -299,6 +301,22 @@ async def ai_draft(group_id: int, body: DraftIn, s: AsyncSession = Session):
 @admin.get("/stats")
 async def get_stats(days: int = 7, s: AsyncSession = Session):
     return await stats.overview(s, max(1, min(days, 90)))
+
+
+@admin.get("/quota")
+async def quota_overview(s: AsyncSession = Session):
+    return await quota.overview(s)
+
+
+@admin.post("/quota/{group_id}/push", response_model=OutboundOut)
+async def quota_push(group_id: int, body: QuotaPushIn, actor: Actor = Me, s: AsyncSession = Session):
+    g = await s.get(Group, group_id)
+    if not g or g.kind != GroupKind.supplier:
+        raise HTTPException(404, "供应商群不存在")
+    item = await quota.draft_push(s, g, body.note)
+    await s.commit()
+    await s.refresh(item)
+    return _out(item)
 
 
 @admin.get("/parties", response_model=list[PartyOut])

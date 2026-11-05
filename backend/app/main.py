@@ -14,6 +14,7 @@ from app.config import settings
 from app.db import SessionLocal, run_migrations
 from app.services.memory import close_idle
 from app.services.presend import flush_due, recover_stuck, remind_suppliers
+from app.services.quota import auto_push
 from app.services.seed import seed_defaults
 from app.services.sla import check_sla
 
@@ -33,6 +34,7 @@ async def scheduler() -> None:
                 if time.monotonic() - last_close > 300:  # 每 5 分钟检查一次空闲会话
                     last_close = time.monotonic()
                     await close_idle(s)
+                    await auto_push(s)
                 if time.monotonic() - last_sla > 60:  # 每分钟检查一次超时未回复
                     last_sla = time.monotonic()
                     await check_sla(s)

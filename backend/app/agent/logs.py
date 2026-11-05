@@ -254,3 +254,19 @@ async def lookup(steps: list[str], request_id: str, users: list[str], model: str
             log.exception("日志查询 %s 失败", step)
             ev.add(f"[{step}] 查询失败：{type(e).__name__}")
     return ev
+
+
+async def channel_429(db: LogDB, channel_ids: list[int], hours: int = 24) -> dict:
+    """某些渠道最近的 429 与错误数量，用于催量。"""
+    t = await db.table("logs")
+    if t is None or not channel_ids or "channel_id" not in t.c:
+        return {"rate_limited": 0, "errors": 0, "success": 0}
+    since = int(time.time()) - hours * 3600
+    base = [t.c.channel_id.in_(channel_ids), t.c.created_at >= since]
+    is429 = or_(*[t.c[c].contains("429") for c in ("content", "other") if c in t.c])
+    q = lambda *conds: select(func.count().label("n")).select_from(t).where(*base, *conds)
+    return {
+        "rate_limited": (await db.rows(q(t.c.type == 5, is429)))[0]["n"],
+        "errors": (await db.rows(q(t.c.type == 5)))[0]["n"],
+        "success": (await db.rows(q(t.c.type == 2)))[0]["n"],
+    }

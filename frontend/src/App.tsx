@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import { Command } from 'cmdk'
 import {
-  BarChart3, BookOpen, Inbox, ShieldCheck, LogOut, Monitor, Moon, Search, Sun, Users, Workflow as WorkflowIcon, Zap, MessagesSquare,
+  BarChart3, BookOpen, Gauge, Inbox, ShieldCheck, LogOut, Monitor, Moon, Search, Sun, Users, Workflow as WorkflowIcon, Zap, MessagesSquare,
   Keyboard,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
@@ -16,6 +16,7 @@ import Presend from './pages/Presend'
 const Workflows = lazy(() => import('./pages/Workflows'))
 const StatsPage = lazy(() => import('./pages/Stats'))
 const UsersPage = lazy(() => import('./pages/Users'))
+const QuotaPage = lazy(() => import('./pages/Quota'))
 const StaffPage = lazy(() => import('./pages/Staff'))
 const KnowledgePage = lazy(() => import('./pages/Knowledge'))
 const Incidents = lazy(() => import('./pages/Incidents'))
@@ -35,6 +36,7 @@ function useAuthed() {
 const NAV: { to: string; label: string; icon: ReactNode; key: string }[] = [
   { to: '/presend', label: '预发队列', icon: <Inbox size={16} />, key: 'p' },
   { to: '/incidents', label: '事件中心', icon: <Zap size={16} />, key: 'i' },
+  { to: '/quota', label: '催量中心', icon: <Gauge size={16} />, key: 'q' },
   { to: '/workflows', label: '处理链路', icon: <WorkflowIcon size={16} />, key: 'w' },
   { to: '/knowledge', label: '知识库', icon: <BookOpen size={16} />, key: 'k' },
   { to: '/groups', label: '群与标记', icon: <MessagesSquare size={16} />, key: 'g' },
@@ -44,7 +46,7 @@ const NAV: { to: string; label: string; icon: ReactNode; key: string }[] = [
 
 const SHORTCUTS: [string, string[]][] = [
   ['打开命令面板', ['⌘', 'K']],
-  ['跳转页面', ['G', '然后 P / I / W / K / G / S / D']],
+  ['跳转页面', ['G', '然后 P / I / Q / W / K / G / S / D']],
   ['上下移动', ['J', 'K']],
   ['打开详情', ['Enter']],
   ['立即发送', ['⌘', 'Enter']],
@@ -267,6 +269,7 @@ function Shell() {
                 <Route path="/groups" element={<Groups />} />
                 <Route path="/staff" element={<StaffPage />} />
                 <Route path="/stats" element={<StatsPage />} />
+                <Route path="/quota" element={<QuotaPage />} />
                 <Route path="/users" element={me && me.role !== 'admin' ? <Navigate to="/presend" replace /> : <UsersPage />} />
                 <Route path="*" element={<Navigate to="/presend" replace />} />
               </Routes>

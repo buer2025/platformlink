@@ -94,7 +94,7 @@ function Row({ o, now, selected, editing, setEditing, onSelect, toCustomer }: {
           <div className="flex min-h-7 flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px]">
             {toCustomer
               ? <span className="font-medium text-fg-2">{o.purpose === 'ack' ? '先安抚客户' : o.purpose === 'escalation' ? '拉负责人进来' : '回复客户'}</span>
-              : <><span className="text-fg-3">{o.purpose === 'escalation' ? '升级给' : '转交给'}</span><span className="font-medium text-fg">{o.group_name}</span></>}
+              : <><span className="text-fg-3">{o.purpose === 'escalation' ? '升级给' : o.purpose === 'quota_push' ? '催量给' : '转交给'}</span><span className="font-medium text-fg">{o.group_name}</span></>}
             {o.purpose === 'ack' && !editing && <span className="truncate text-fg">「{o.text}」</span>}
             {o.mentions.length > 0 && <span className="text-fg-3">{o.mentions.map((m) => `@${m}`).join(' ')}</span>}
             <span className="ml-auto flex items-center gap-2">
@@ -190,7 +190,7 @@ function Thread({ incident, items, groupName, children }: { incident?: Incident;
           <Avatar name={groupName} size={40} square />
           <div className="min-w-0 flex-1">
             <h3 className="line-clamp-2 text-[15.5px] leading-snug font-semibold tracking-tight text-fg">
-              {incident?.summary || '主动消息'}
+              {incident?.summary || (first.purpose === 'quota_push' ? '找供应商要量' : '主动消息')}
             </h3>
             <p className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[12.5px] text-fg-3">
               <span className="text-fg-2">{groupName}</span>
@@ -274,7 +274,7 @@ export default function Presend() {
               <Thread key={key} items={items} groupName={threadGroup(items, incidents, groupNames)} incident={items[0].incident_id ? incidents.get(items[0].incident_id) : undefined}>
                 <AnimatePresence initial={false} mode="popLayout">
                   {items.map((o) => (
-                    <Row key={o.id} toCustomer={o.group_name === threadGroup(items, incidents, groupNames)} o={o} now={now} selected={sel === o.id} editing={editing === o.id}
+                    <Row key={o.id} toCustomer={!['supplier_ticket', 'supplier_remind', 'quota_push'].includes(o.purpose) && o.group_name === threadGroup(items, incidents, groupNames)} o={o} now={now} selected={sel === o.id} editing={editing === o.id}
                       setEditing={(v) => setEditing(v ? o.id : null)} onSelect={() => setSel(o.id)} />
                   ))}
                 </AnimatePresence>

@@ -259,3 +259,7 @@ class UserOut(BaseModel):
     role: UserRole
     active: bool
     on_duty: bool
+
+
+class QuotaPushIn(BaseModel):
+    note: str = ""  # 同事补充（例如客户的目标量级）

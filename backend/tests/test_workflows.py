@@ -706,3 +706,29 @@ async def test_sla_alerts(client, fake, monkeypatch):  # noqa: F811
     assert work_hours(datetime(2026, 11, 5, 3, 0, tzinfo=UTC))  # 周四 11:00 北京
     assert not work_hours(datetime(2026, 11, 5, 14, 0, tzinfo=UTC))  # 周四 22:00
     assert not work_hours(datetime(2026, 11, 7, 3, 0, tzinfo=UTC))  # 周六
+
+
+async def test_quota_center(client, fake, logdb):  # noqa: F811
+    """催量中心：按供应商汇总（日志库 429 + 未解决事件）；一键起草需人工确认；堆积时自动起草且有冷却。"""
+    from app.db import SessionLocal
+    from app.services import quota
+    cid, sid = await setup_groups(client)
+    await client.patch(f"/api/groups/{sid}", json={"channel_ids": [7], "style": {"address": "张哥"}})
+    for i, t in enumerate(["seedance 一直 429", "seedance 又 429 了，限流", "seedance 429 太多了"]):
+        await client.post("/api/simulate", json={"chat_id": f"c{i}", "chat_name": f"客户{i}", "text": "hi"})
+        g = next(x for x in (await client.get("/api/groups")).json() if x["external_id"] == f"c{i}")
+        await client.patch(f"/api/groups/{g['id']}", json={"automation": "auto"})
+        await client.post("/api/simulate", json={"chat_id": f"c{i}", "text": t})
+    view = next(v for v in (await client.get("/api/quota")).json() if v["group_id"] == sid)
+    assert view["open_incidents"] == 3 and len(view["customers"]) == 3
+    assert view["usage_24h"]["errors"] == 2  # 模拟日志里渠道 7 的错误
+
+    async with SessionLocal() as s:
+        assert await quota.auto_push(s) == 1
+        assert await quota.auto_push(s) == 0  # 冷却中
+    push = next(o for o in await outbound(client) if o["purpose"] == "quota_push")
+    assert push["status"] == "needs_approval" and push["group_id"] == sid
+    assert "张哥" in push["text"]
+    r = await client.post(f"/api/quota/{sid}/push", json={"note": "客户要 300 RPM"})
+    assert r.json()["purpose"] == "quota_push"
+    assert (await client.post(f"/api/quota/{cid}/push", json={})).status_code == 404
