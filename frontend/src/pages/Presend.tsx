@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { Check, CornerDownRight, ChevronRight, CircleAlert, Inbox, Pencil, RotateCw, Send, Timer, X } from 'lucide-react'
+import { Check, CornerDownRight, MessageCircle, ChevronRight, CircleAlert, Inbox, Pencil, RotateCw, Send, Timer, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
-import { ago, api, categoryLabel, post, type Group, type Incident, type Outbound } from '../api'
+import { ago, api, categoryLabel, post, type Group, type Incident, type Message, type Outbound } from '../api'
 import { useHotkeys, useListNav, useNow } from '../hooks'
 import { Avatar, Badge, Button, Card, Empty, Kbd, listItem, PageHeader, ScoreRing, scoreTone, Segmented, Skeleton, Stat, Textarea, type Tone } from '../ui'
 
@@ -149,6 +149,32 @@ function Row({ o, now, selected, editing, setEditing, onSelect, toCustomer }: {
   )
 }
 
+/** 客户说了什么：连发的几条都列出来，回复会一次性覆盖它们。 */
+function CustomerSaid({ incidentId }: { incidentId: number }) {
+  const { data = [] } = useQuery({ queryKey: ['incident-msgs', incidentId], queryFn: () => api<Message[]>(`/incidents/${incidentId}/messages`) })
+  const [all, setAll] = useState(false)
+  const said = data.filter((m) => !m.from_us)
+  if (!said.length) return null
+  const shown = all ? said : said.slice(-3)
+  return (
+    <div className="border-b border-line bg-panel-2/40 px-6 py-3.5">
+      <div className="mb-2 flex items-center gap-2 text-[11.5px] text-fg-3">
+        <MessageCircle size={12} />客户说{said.length > 1 && <span>· {said.length} 条，回复会一并覆盖</span>}
+        {said.length > 3 && <button className="ml-auto hover:text-accent" onClick={() => setAll(!all)}>{all ? '收起' : `查看全部 ${said.length} 条`}</button>}
+      </div>
+      <ul className="space-y-1.5">
+        {shown.map((m) => (
+          <li key={m.id} className="flex items-baseline gap-2.5 text-[13.5px]">
+            <span className="tnum w-10 shrink-0 text-[11px] text-fg-3">{new Date(m.created_at).toTimeString().slice(0, 5)}</span>
+            <span className="shrink-0 text-fg-3">{m.sender}</span>
+            <span className="text-fg">{m.text}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 const verdictText: Record<string, [string, Tone]> = {
   customer: ['客户侧问题', 'info'], us: ['我方问题', 'violet'], supplier: ['供应商问题', 'warn'], unknown: ['待确认', 'slate'],
 }
@@ -185,6 +211,7 @@ function Thread({ incident, items, groupName, children }: { incident?: Incident;
             </Link>
           )}
         </header>
+        {incident && <CustomerSaid incidentId={incident.id} />}
         <div className="divide-y divide-line px-6 py-1">{children}</div>
       </Card>
     </motion.section>

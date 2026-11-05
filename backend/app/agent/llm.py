@@ -152,15 +152,112 @@ async def distill(timeline: str) -> KnowledgeDraft | None:
         timeline, KnowledgeDraft, effort="medium")
 
 
+INTEGRATE = (
+    "你是技术支持，客户在群里连续发了几条消息。把下面这条还没发出的回复草稿改写成一条完整的回复，"
+    "要覆盖客户所有消息里的问题和信息（例如追问、补充的现象、催促），不要逐条复述，像真人一次性回完。"
+    "草稿里的事实和结论不能改变，不要新增没有依据的承诺。2~4 句，口语化。"
+)
+FOLLOWUP = (
+    "你是技术支持。我们之前已经回复过客户，现在客户又发了新消息（可能是追问、催促或补充）。"
+    "根据当前处理进展，写一条针对这条新消息的简短回复：先回应他这句话，再说明当前进展和下一步；"
+    "进展里没有的信息不要编造，不要重复之前已经说过的大段解释。1~3 句，口语化。"
+    "如果这条消息不需要回复（例如只是「好的」「谢谢」「收到」），text 返回空字符串。"
+)
+
+
+async def integrate(draft: str, conversation: str, context: str) -> str:
+    """把待发回复改写成覆盖客户全部消息的一条回复。"""
+    r = await _parse(INTEGRATE, f"客户消息（按时间）:\n{conversation}\n\n处理进展:\n{context}\n\n回复草稿:\n{draft}",
+                     Rewrite, effort="low")
+    return r.text if r else draft
+
+
+async def followup(conversation: str, new_text: str, context: str) -> str:
+    """回复已发出后，客户追问 / 催促时的跟进回复。"""
+    r = await _parse(FOLLOWUP, f"客户消息（按时间）:\n{conversation}\n\n客户最新这条: {new_text}\n\n处理进展:\n{context}",
+                     Rewrite, effort="low")
+    if r is None:
+        return "" if _NO_REPLY.match(new_text.strip()) else "收到，这边还在跟进，有进展第一时间同步您～"
+    return r.text.strip()
+
+
+_NO_REPLY = re.compile(
+    r"^(?:(?:好的?|好滴|ok|okay|收到|谢谢|多谢|感谢|辛苦了?|thx|thanks|👌|👍|🙏|嗯+|行|了解)[\s,，!！。.~～啦呀哈]*)+$",
+    re.IGNORECASE)
+
+
+class StyleProfile(BaseModel):
+    summary: str = Field(description="一句话描述我方在这个群的说话风格")
+    address: str = Field(description="对客户的称呼，如 王总 / 哥 / 老师；没有固定称呼为空")
+    tone: str = Field(description="语气：正式 / 专业亲和 / 轻松 / 熟络 / 英文 等")
+    particles: list[str] = Field(description="常用语气词，如 哈、呀、哦、~、啦")
+    emoji: list[str] = Field(description="常用表情，没有为空")
+    phrases: list[str] = Field(description="常用口头禅或固定说法")
+    taboos: list[str] = Field(description="应避免的说法（从客户反感的反应中推断），没有为空")
+    samples: list[str] = Field(description="挑 3~5 条最能代表我方风格的原话（原样摘录）")
+
+
+def describe_style(style: dict) -> str:
+    """把风格标记整理成给模型看的说明。"""
+    label = {"address": "称呼", "tone": "语气", "particles": "常用语气词", "emoji": "常用表情",
+             "phrases": "口头禅", "taboos": "禁忌（绝对不要出现）", "summary": "整体风格"}
+    lines = []
+    for k, name in label.items():
+        v = style.get(k)
+        if v:
+            lines.append(f"- {name}：{'、'.join(v) if isinstance(v, list) else v}")
+    if samples := style.get("samples"):
+        lines.append("- 我方在这个群的真实发言（模仿它们的句式、长度和口吻）：")
+        lines += [f"  · {x}" for x in samples[:6]]
+    return "\n".join(lines)
+
+
+STYLIZE = """你负责把一条要发到 IM 群的消息改写成这个群里我方同事平时说话的样子，让对方感觉是熟悉的人在回，而不是机器人。
+
+要求：
+- 事实、数字、request_id、结论一个字都不能改，不要加入原文没有的承诺或信息。
+- 有称呼就自然地用上（开头或句中，不要每句都叫）。
+- 克制：整条消息里语气词（含「～」）合计不超过 2 个，表情最多 1 个；内容严肃（报错原因、余额、故障）时更少。
+- 不要照搬样本里的寒暄（早呀、晚安等），问候语必须和「当前时间」相符，没把握就不问候。
+- 不要补充原文没有的句子（例如「有进展第一时间同步」），只调整说法。
+- 句子长度、断句方式模仿真实发言样本；正式的群就保持正式，不要强行卖萌。
+- 禁忌里的说法绝对不能出现。
+- 只输出改写后的消息本身。"""
+
+
+def _now_cn() -> str:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%H:%M（%A）")
+
+
 async def stylize(text: str, style: dict, purpose: str) -> str:
-    """按群的风格标记改写消息；无风格或无 Key 时原样返回。"""
-    if not style:
+    """按群的风格标记改写消息；无 Key 时做最基本的称呼处理。"""
+    if not style or not any(style.values()):
         return text
     result = await _parse(
-        "你负责把一条要发到 IM 群的消息改写成符合该群聊天风格的说法，事实和数字不能改变，"
-        "不要显得机械，不要加入原文没有的承诺。",
-        f"用途: {purpose}\n群风格: {style}\n原文: {text}",
+        STYLIZE,
+        f"消息用途: {purpose}\n当前时间: {_now_cn()}\n\n这个群的风格:\n{describe_style(style)}\n\n原文:\n{text}",
         Rewrite,
         effort="low",
     )
-    return result.text if result else text
+    if result and result.text.strip():
+        return result.text.strip()
+    address = style.get("address")
+    if address and address not in text:
+        return f"{address}，{text}"
+    return text
+
+
+async def learn_style(ours: list[str], theirs: list[str]) -> StyleProfile | None:
+    """从群聊历史里学习我方同事的说话风格。"""
+    if not ours:
+        return None
+    convo = "\n".join(f"[我方] {x}" for x in ours[-80:])
+    if theirs:
+        convo += "\n\n（客户的发言，用于判断关系远近和客户反感什么）\n" + "\n".join(
+            f"[客户] {x}" for x in theirs[-40:])
+    return await _parse(
+        "你在分析一个工作群里「我方」技术支持同事是怎么和客户说话的，提炼成风格档案，"
+        "让 AI 之后回复时能模仿。只根据聊天记录里真实出现的用法总结，不要编造；样本必须原样摘录。",
+        convo, StyleProfile, effort="medium")

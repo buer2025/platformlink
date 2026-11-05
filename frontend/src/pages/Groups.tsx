@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { ChevronRight, Database, MessagesSquare, Search } from 'lucide-react'
+import { ChevronRight, Database, MessagesSquare, Search, Sparkles, Wand2 } from 'lucide-react'
+import { AnimatePresence, motion } from 'motion/react'
 import { useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -25,6 +26,98 @@ function Section({ title, desc, children, icon }: { title: string; desc?: string
   )
 }
 
+type Profile = { summary: string; address: string; tone: string; particles: string[]; emoji: string[]; phrases: string[]; taboos: string[]; samples: string[] }
+
+/** 风格标记：手动打标签，或从历史聊天里学习；右侧随时试一句看效果。 */
+function StyleSection({ g, f, set, ev }: { g: Group; f: Record<string, any>; set: (k: string) => (v: unknown) => void; ev: (k: string) => (e: { target: { value: string } }) => void }) {
+  const [learned, setLearned] = useState<{ profile: Profile; based_on: { ours: number } } | null>(null)
+  const [sample, setSample] = useState('收到，这个问题是上游限流导致的，我们已经在协调扩容了，预计半小时内恢复。')
+  const learn = useMutation({
+    mutationFn: () => post<{ profile: Profile; based_on: { ours: number } }>(`/groups/${g.id}/style/learn`),
+    onSuccess: setLearned,
+    onError: (e) => toast.error(e instanceof Error ? e.message : String(e)),
+  })
+  const preview = useMutation({
+    mutationFn: () => post<{ text: string }>(`/groups/${g.id}/style/preview`, {
+      text: sample, style: {
+        address: f.address, tone: f.tone, summary: f.summary, particles: f.particles, emoji: f.emoji,
+        phrases: f.phrases, taboos: f.taboos, samples: splitLines(f.samples),
+      },
+    }),
+  })
+  const apply = () => {
+    if (!learned) return
+    const p = learned.profile
+    set('summary')(p.summary); set('address')(p.address || f.address); set('tone')(p.tone || f.tone)
+    set('particles')(p.particles); set('emoji')(p.emoji); set('phrases')(p.phrases); set('taboos')(p.taboos)
+    set('samples')(p.samples.join('\n'))
+    setLearned(null)
+    toast.success('已填入学到的风格，保存后生效')
+  }
+  return (
+    <section>
+      <div className="flex items-start gap-3">
+        <div className="flex-1">
+          <h3 className="text-[13px] font-semibold">说话风格</h3>
+          <p className="mt-0.5 text-xs text-fg-3">Agent 发到这个群的每条消息都会按这里改写，让对方觉得是熟悉的人在回。</p>
+        </div>
+        <Button size="sm" icon={<Sparkles size={13} />} disabled={learn.isPending} onClick={() => learn.mutate()}>
+          {learn.isPending ? '正在分析聊天记录…' : '从聊天记录学习'}
+        </Button>
+      </div>
+      <AnimatePresence>
+        {learned && (
+          <motion.div initial={{ opacity: 0, y: -6, height: 0 }} animate={{ opacity: 1, y: 0, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
+            className="mt-3 overflow-hidden rounded-xl bg-violet-soft/60 ring-1 ring-violet/20 ring-inset">
+            <div className="p-4 text-[13px]">
+              <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-violet"><Sparkles size={12} />分析了我方 {learned.based_on.ours} 条发言</div>
+              <p className="text-fg">{learned.profile.summary}</p>
+              <div className="mt-2.5 flex flex-wrap gap-1">
+                {learned.profile.address && <Badge tone="accent">称呼 · {learned.profile.address}</Badge>}
+                {learned.profile.tone && <Badge>{learned.profile.tone}</Badge>}
+                {learned.profile.particles.map((x) => <Badge key={x} tone="violet">{x}</Badge>)}
+                {learned.profile.emoji.map((x) => <Badge key={x}>{x}</Badge>)}
+                {learned.profile.phrases.map((x) => <Badge key={x}>「{x}」</Badge>)}
+              </div>
+              <div className="mt-3 flex gap-2">
+                <Button size="sm" variant="primary" onClick={apply}>填入下方</Button>
+                <Button size="sm" variant="ghost" onClick={() => setLearned(null)}>不用了</Button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <div className="mt-4 grid gap-3.5 sm:grid-cols-2">
+        <Field label="称呼"><Input value={f.address} onChange={ev('address')} placeholder="王总 / 哥 / 老师" /></Field>
+        <Field label="语气"><Input value={f.tone} onChange={ev('tone')} placeholder="正式 / 专业亲和 / 轻松 / 熟络 / 英文" /></Field>
+        <Field label="语气词" hint="回车添加"><TagInput tone="violet" value={f.particles} onChange={set('particles')} placeholder="哈、呀、~" /></Field>
+        <Field label="常用表情"><TagInput value={f.emoji} onChange={set('emoji')} placeholder="🙏 👌" /></Field>
+        <Field label="口头禅"><TagInput value={f.phrases} onChange={set('phrases')} placeholder="辛苦啦、好嘞" /></Field>
+        <Field label="禁忌"><TagInput tone="bad" value={f.taboos} onChange={set('taboos')} placeholder="不提竞品" /></Field>
+        <Field label="整体风格" wide><Input value={f.summary} onChange={ev('summary')} placeholder="例如：熟络但专业，称呼王总，句子短，偶尔用~" /></Field>
+        <Field label="真实发言样本" hint="每行一条，Agent 会模仿句式和长度" wide><Textarea rows={3} value={f.samples} onChange={ev('samples')} /></Field>
+      </div>
+      <div className="mt-4 rounded-xl bg-panel-2/70 p-4 ring-1 ring-line ring-inset">
+        <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-fg-2"><Wand2 size={13} />试一句</div>
+        <div className="flex gap-2">
+          <Input value={sample} onChange={(e) => setSample(e.target.value)} />
+          <Button size="sm" className="h-8" disabled={!sample.trim() || preview.isPending} onClick={() => preview.mutate()}>
+            {preview.isPending ? '改写中…' : '看效果'}
+          </Button>
+        </div>
+        <AnimatePresence mode="wait">
+          {preview.data && (
+            <motion.div key={preview.data.text} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
+              className="mt-3 max-w-[90%] rounded-2xl rounded-tl-md bg-panel px-4 py-2.5 text-[14px] leading-relaxed shadow-card">
+              {preview.data.text}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </section>
+  )
+}
+
 function Editor({ g, onClose }: { g: Group | undefined; onClose: () => void }) {
   const qc = useQueryClient()
   const [f, setF] = useState<Record<string, any>>({})
@@ -36,7 +129,8 @@ function Editor({ g, onClose }: { g: Group | undefined; onClose: () => void }) {
       name: g.name, kind: g.kind, automation: g.automation, level: g.level, models: g.models, contacts: g.contacts,
       tags: g.tags, api_users: g.api_users, channel_ids: g.channel_ids.map(String),
       owner: g.owner, backup_owner: g.backup_owner, extra_delay_seconds: String(g.extra_delay_seconds),
-      address: str(st.address), tone: str(st.tone), phrases: list(st.phrases), taboos: list(st.taboos), samples: lines(st.samples),
+      address: str(st.address), tone: str(st.tone), summary: str(st.summary), phrases: list(st.phrases), taboos: list(st.taboos),
+      particles: list(st.particles), emoji: list(st.emoji), samples: lines(st.samples),
     })
   }
   const set = (k: string) => (v: unknown) => setF((x) => ({ ...x, [k]: v }))
@@ -51,7 +145,8 @@ function Editor({ g, onClose }: { g: Group | undefined; onClose: () => void }) {
     mutationFn: () => {
       const style: Record<string, unknown> = { ...(g!.style ?? {}) }
       const put = (k: string, v: unknown) => { if ((Array.isArray(v) && v.length) || (typeof v === 'string' && v)) style[k] = v; else delete style[k] }
-      put('address', f.address.trim()); put('tone', f.tone.trim()); put('phrases', f.phrases); put('taboos', f.taboos)
+      put('address', f.address.trim()); put('tone', f.tone.trim()); put('summary', f.summary.trim()); put('phrases', f.phrases); put('taboos', f.taboos)
+      put('particles', f.particles); put('emoji', f.emoji)
       put('samples', splitLines(f.samples))
       return patch<Group>(`/groups/${g!.id}`, {
         name: f.name.trim() || g!.name, kind: f.kind, automation: f.automation, level: f.level.trim(),
@@ -102,13 +197,7 @@ function Editor({ g, onClose }: { g: Group | undefined; onClose: () => void }) {
                 </div>
               </>}
           </Section>
-          <Section title="风格标记" desc="Agent 回复时据此调整语气，让消息不像机器发的。">
-            <Field label="称呼"><Input value={f.address} onChange={ev('address')} placeholder="王总 / 哥 / 老师" /></Field>
-            <Field label="语气"><Input value={f.tone} onChange={ev('tone')} placeholder="正式 / 轻松 / 熟络 / 英文" /></Field>
-            <Field label="口头禅"><TagInput value={f.phrases} onChange={set('phrases')} placeholder="辛苦啦" /></Field>
-            <Field label="禁忌"><TagInput tone="bad" value={f.taboos} onChange={set('taboos')} placeholder="不提竞品" /></Field>
-            <Field label="风格样本" hint="每行一条我方在该群的典型发言" wide><Textarea rows={3} value={f.samples} onChange={ev('samples')} /></Field>
-          </Section>
+          <StyleSection g={g!} f={f} set={set} ev={ev} />
           <section>
             <h3 className="mb-2 text-[13px] font-semibold">最近消息</h3>
             {msgs.length === 0 ? <p className="text-xs text-fg-3">暂无</p> : (

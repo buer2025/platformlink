@@ -41,6 +41,7 @@ from app.schemas import (
     SimulateIn,
     StaffIn,
     StaffOut,
+    StylePreviewIn,
     WorkflowIn,
     WorkflowOut,
 )
@@ -86,6 +87,35 @@ async def update_group(group_id: int, body: GroupUpdate, s: AsyncSession = Sessi
 async def group_messages(group_id: int, s: AsyncSession = Session):
     q = select(Message).where(Message.group_id == group_id).order_by(Message.id.desc()).limit(200)
     return [_aware(m, "created_at") for m in (await s.scalars(q)).all()]
+
+
+@admin.post("/groups/{group_id}/style/learn")
+async def learn_group_style(group_id: int, s: AsyncSession = Session):
+    """分析该群历史聊天，学习我方同事的说话风格，返回草稿供确认。"""
+    g = await s.get(Group, group_id)
+    if not g:
+        raise HTTPException(404, "群不存在")
+    rows = (await s.scalars(select(Message).where(Message.group_id == group_id)
+                            .order_by(Message.id.desc()).limit(400))).all()
+    rows.reverse()
+    ours = [m.text for m in rows if m.from_us and m.sender != "platformlink"]
+    theirs = [m.text for m in rows if not m.from_us]
+    if len(ours) < 3:
+        raise HTTPException(422, f"这个群里我方同事的发言只有 {len(ours)} 条，至少需要 3 条才能学习。"
+                                 "先在群里正常聊一段时间，或手动填写风格。")
+    p = await llm.learn_style(ours, theirs)
+    if p is None:
+        raise HTTPException(503, "AI 暂时不可用，请稍后再试")
+    return {"profile": p.model_dump(), "based_on": {"ours": len(ours), "theirs": len(theirs)}}
+
+
+@admin.post("/groups/{group_id}/style/preview")
+async def preview_group_style(group_id: int, body: StylePreviewIn, s: AsyncSession = Session):
+    g = await s.get(Group, group_id)
+    if not g:
+        raise HTTPException(404, "群不存在")
+    style = body.style if body.style is not None else (g.style or {})
+    return {"text": await llm.stylize(body.text, style, "customer_reply")}
 
 
 @admin.get("/parties", response_model=list[PartyOut])

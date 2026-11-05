@@ -131,7 +131,7 @@ async function api(path, body, method) {
   await page.getByText('客户A群').click()
   await page.getByText('日志库绑定').waitFor()
   await page.getByPlaceholder('王总 / 哥 / 老师').fill('王总')
-  await page.getByPlaceholder('正式 / 轻松 / 熟络 / 英文').fill('熟络')
+  await page.getByPlaceholder('正式 / 专业亲和 / 轻松 / 熟络 / 英文').fill('熟络')
   await page.getByPlaceholder('VIP / KA / 主力供应商').fill('VIP')
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/groups.png`, fullPage: true })
   await page.getByRole('button', { name: '保存' }).click()

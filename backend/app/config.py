@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     scheduler_interval_seconds: float = 5.0
     # 同群同类问题在此时间内合并为一个事件
     incident_merge_minutes: int = 30
+    # 未解决事件在多久内承接客户的追问 / 催促（持续对话）
+    conversation_hours: int = 6
     # 供应商转交单无回复多久后催办，最多催几次
     supplier_remind_minutes: int = 30
     supplier_max_reminders: int = 2

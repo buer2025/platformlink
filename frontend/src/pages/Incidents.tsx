@@ -39,6 +39,10 @@ const eventMeta: Record<string, [string, LucideIcon, Tone]> = {
   no_supplier: ['需人工转交', CircleAlert, 'bad'],
   manual: ['人工操作', Pencil, 'slate'],
   reinvestigate: ['重新排查', RotateCcw, 'violet'],
+  integrated: ['整合回复', GitMerge, 'violet'],
+  followup: ['跟进回复', MessageCircle, 'accent' as Tone],
+  no_reply: ['无需回复', Check, 'slate'],
+  queued_for_integration: ['等待整合', Timer, 'slate'],
   note: ['备注', NotebookPen, 'slate'],
   knowledge_saved: ['沉淀知识', BookPlus, 'ok'],
 }

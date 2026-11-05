@@ -245,7 +245,72 @@ async def test_corrected_request_id_reinvestigates(client, fake):  # noqa: F811
     assert len(acks) == 1  # 不重复安抚
     ev = (await client.get(f"/api/incidents/{incs[0]['id']}/events")).json()
     assert any(e["kind"] == "reinvestigate" and "req-test-00 → req-test-003" in e["text"] for e in ev)
-    # 同一个 request_id 再发一次：只合并，不重复排查
+    # 同一个 request_id 再发一次：不重复排查，未发出的回复改写成整合版（始终只有一条待发）
     await client.post("/api/webhooks/telegram", headers=TG,
                       json=tg(100, 23, "还是 429 request_id: req-test-003"))
+    live = [o for o in await outbound(client) if o["purpose"] == "customer_reply" and o["status"] != "cancelled"]
+    assert len(live) == 1 and live[0]["status"] == "needs_approval"
+
+
+
+async def test_continuous_conversation(client, fake):  # noqa: F811
+    """回复发出后：追问得到跟进回复（引用这条追问），致谢不回复，无关闲聊无事件时忽略。"""
+    _cid, _ = await setup_groups(client)
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 31, "seedance 报错了"))
+    reply = next(o for o in await outbound(client) if o["purpose"] == "customer_reply")
+    assert (await client.post(f"/api/outbound/{reply['id']}/send")).json()["status"] == "sent"
+
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 32, "怎么样了？"))
+    inc = (await client.get("/api/incidents")).json()[0]
+    assert inc["related_messages"] == 2
+    follow = [o for o in await outbound(client) if o["purpose"] == "customer_reply" and o["status"] != "sent"]
+    assert len(follow) == 1 and "跟进" in follow[0]["text"]
+    ev = [e["kind"] for e in (await client.get(f"/api/incidents/{inc['id']}/events")).json()]
+    assert "followup" in ev
+
+    await client.post(f"/api/outbound/{follow[0]['id']}/send")
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 33, "好的谢谢"))
     assert len([o for o in await outbound(client) if o["purpose"] == "customer_reply"]) == 2
+    ev = [e["kind"] for e in (await client.get(f"/api/incidents/{inc['id']}/events")).json()]
+    assert "no_reply" in ev
+
+    # 事件解决后，闲聊不再触发任何东西
+    await client.patch(f"/api/incidents/{inc['id']}", json={"status": "resolved"})
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 34, "周末愉快"))
+    assert len(await outbound(client)) == 3  # 安抚 + 回复 + 跟进；闲聊不新增
+
+
+async def test_pending_reply_integrates_followups(client, fake):  # noqa: F811
+    await setup_groups(client)
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 41, "seedance 报错了"))
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 42, "急，在线等"))
+    replies = [o for o in await outbound(client) if o["purpose"] == "customer_reply"]
+    live = [o for o in replies if o["status"] != "cancelled"]
+    assert len(live) == 1 and len(replies) == 2
+    inc = (await client.get("/api/incidents")).json()[0]
+    ev = [e["kind"] for e in (await client.get(f"/api/incidents/{inc['id']}/events")).json()]
+    assert "integrated" in ev
+
+
+async def test_style_learn_and_preview(client, fake, monkeypatch):  # noqa: F811
+    from app.agent import llm
+    cid, _ = await setup_groups(client)
+    await client.post("/api/staff", json={"name": "小王", "platform": "telegram", "account": "wang"})
+    r = await client.post(f"/api/groups/{cid}/style/learn")
+    assert r.status_code == 422 and "至少需要 3 条" in r.json()["detail"]
+    for i, t in enumerate(["王总好呀，这个我马上看哈~", "王总放心，已经在催上游啦", "好嘞王总，有消息第一时间同步您~"]):
+        await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 60 + i, t, user="wang"))
+
+    async def fake_learn(ours, theirs):
+        assert len(ours) == 3
+        return llm.StyleProfile(summary="熟络", address="王总", tone="熟络", particles=["哈", "~"],
+                                emoji=[], phrases=["好嘞"], taboos=[], samples=ours[:2])
+    monkeypatch.setattr(llm, "learn_style", fake_learn)
+    body = (await client.post(f"/api/groups/{cid}/style/learn")).json()
+    assert body["profile"]["address"] == "王总" and body["based_on"]["ours"] == 3
+
+    # 无 Key 时预览至少会加上称呼
+    r = await client.post(f"/api/groups/{cid}/style/preview",
+                          json={"text": "已经在处理了", "style": {"address": "王总"}})
+    assert r.json()["text"] == "王总，已经在处理了"
+    assert "王总" in llm.describe_style(body["profile"])

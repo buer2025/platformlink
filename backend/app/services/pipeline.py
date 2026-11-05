@@ -117,6 +117,15 @@ async def _handle_supplier_reply(session: AsyncSession, group: Group, msg: Messa
                               reply_to=origin.external_id if origin else "")
 
 
+async def _active_incident(session: AsyncSession, group: Group) -> Incident | None:
+    """群里最近仍在处理中的事件（用于承接不像新问题的追问）。"""
+    since = presend.utcnow() - timedelta(hours=settings.conversation_hours)
+    rows = (await session.scalars(select(Incident).where(
+        Incident.group_id == group.id, Incident.status != IncidentStatus.resolved,
+    ).order_by(Incident.id.desc()).limit(5))).all()
+    return next((i for i in rows if presend.aware(i.created_at) >= since), None)
+
+
 async def _mergeable(session: AsyncSession, group: Group, category: str) -> Incident | None:
     since = presend.utcnow() - timedelta(minutes=settings.incident_merge_minutes)
     rows = (await session.scalars(select(Incident).where(
@@ -126,11 +135,41 @@ async def _mergeable(session: AsyncSession, group: Group, category: str) -> Inci
     return next((i for i in rows if presend.aware(i.created_at) >= since), None)
 
 
+async def _conversation(session: AsyncSession, incident: Incident) -> tuple[str, str, int]:
+    """该事件下客户的全部消息：(按时间拼好的文本, 最新一条的平台消息 ID, 最大本地 ID)。"""
+    rows = (await session.scalars(select(Message).where(
+        Message.incident_id == incident.id, Message.group_id == incident.group_id,
+        Message.from_us.is_(False)).order_by(Message.id))).all()
+    if not rows:
+        return "", "", 0
+    text = "\n".join(f"[{m.created_at:%H:%M:%S}] {m.sender}: {m.text}" for m in rows)
+    return text, rows[-1].external_id, rows[-1].id
+
+
+PROGRESS = {
+    IncidentStatus.investigating: "排查中",
+    IncidentStatus.waiting_supplier: "已转交上游供应商，等待处理",
+    IncidentStatus.resolved: "已解决",
+    IncidentStatus.open: "新建",
+}
+
+
+def _progress(incident: Incident) -> str:
+    lines = [f"状态: {PROGRESS.get(incident.status, incident.status)}",
+             f"责任方判断: {incident.responsible or '未定'}", f"依据: {incident.evidence[:600]}"]
+    if incident.status == IncidentStatus.waiting_supplier:
+        lines.append(f"供应商回复: {incident.supplier_last_reply or '暂未回复'}"
+                     + (f"（已催 {incident.reminders} 次）" if incident.reminders else ""))
+    return "\n".join(lines)
+
+
 async def _investigate(session: AsyncSession, group: Group, incident: Incident,
                        c: llm.Classification, text: str, reply_to: str,
                        wf: Workflow | None) -> None:
     """查数据 → Agent 排查 → 客户回复 / 供应商转交进入预发队列。"""
     force_confirm = bool(wf and wf.automation == "confirm")
+    conv, _, seen = await _conversation(session, incident)
+    text = conv or text
     steps = wf.lookups if wf else DEFAULT_LOOKUPS
     ev = await logs.lookup(steps, c.request_id, group.api_users or [], c.model)
     incident.lookup_result = ev.text
@@ -158,9 +197,14 @@ async def _investigate(session: AsyncSession, group: Group, incident: Incident,
            f"责任方 {f.responsible}，准确率 {f.confidence}：{f.evidence}"
            + (f"\n自检：{f.self_check}" if f.self_check else ""))
 
-    reply = await llm.stylize(f.customer_reply, group.style, "customer_reply")
+    reply = f.customer_reply
+    conv2, latest, newest = await _conversation(session, incident)
+    if newest > seen:  # 排查期间客户又发了消息 → 一次性回复全部
+        reply = await llm.integrate(reply, conv2, _progress(incident))
+        record(session, incident.id, "integrated", "排查期间客户追加了消息，回复已整合为一条")
+    reply = await llm.stylize(reply, group.style, "customer_reply")
     await presend.enqueue(session, group, reply, f.confidence, "customer_reply", incident.id,
-                          reply_to=reply_to, force_confirm=force_confirm)
+                          reply_to=latest or reply_to, force_confirm=force_confirm)
 
     route = wf.route_supplier if wf else True
     # 已经转交过供应商的不再重复转交
@@ -198,6 +242,39 @@ async def _reinvestigate(session: AsyncSession, group: Group, incident: Incident
     await _investigate(session, group, incident, c, m.text, m.message_id, wf)
 
 
+async def _respond_followup(session: AsyncSession, group: Group, incident: Incident,
+                           m: InboundMessage) -> None:
+    """同一事件里客户又发了消息：未发出的回复改写成整合版；已发出的则针对新消息跟进。"""
+    replies = (await session.scalars(select(Outbound).where(
+        Outbound.incident_id == incident.id, Outbound.purpose == "customer_reply",
+        Outbound.status != OutboundStatus.cancelled).order_by(Outbound.id.desc()))).all()
+    if not incident.responsible:
+        # 首次排查还没结束，结束时会自动整合这条
+        record(session, incident.id, "queued_for_integration", "排查进行中，这条会合并进首次回复")
+        return
+    wf = await session.get(Workflow, incident.workflow_id) if incident.workflow_id else None
+    force_confirm = bool(wf and wf.automation == "confirm")
+    conv, latest, _ = await _conversation(session, incident)
+    last = replies[0] if replies else None
+    if last and last.status in presend.RETRYABLE:
+        text = await llm.integrate(last.text, conv, _progress(incident))
+        text = await llm.stylize(text, group.style, "customer_reply")
+        last.status = OutboundStatus.cancelled
+        await presend.enqueue(session, group, text, last.score, "customer_reply", incident.id,
+                              reply_to=latest, force_confirm=force_confirm)
+        record(session, incident.id, "integrated", "客户追加了消息，未发出的回复已改写为整合版")
+        return
+    # 已经回复过：针对这条新消息跟进当前进展
+    text = await llm.followup(conv, m.text, _progress(incident))
+    if not text:
+        record(session, incident.id, "no_reply", f"「{m.text}」无需回复")
+        return
+    text = await llm.stylize(text, group.style, "customer_reply")
+    await presend.enqueue(session, group, text, min(incident.confidence, 85), "customer_reply",
+                          incident.id, reply_to=m.message_id, force_confirm=force_confirm)
+    record(session, incident.id, "followup", "回复发出后客户追问，已起草跟进回复")
+
+
 async def handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident | None:
     group = await upsert_group(session, m)
     if m.message_id and await session.scalar(select(Message.id).where(
@@ -223,6 +300,15 @@ async def handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident |
 
     c = await llm.classify(m.text)
     if not c.is_issue:
+        # 持续对话：群里有未解决的事件时，追问 / 催促 / 致谢都接着这个事件聊
+        if active := await _active_incident(session, group):
+            active.related_messages += 1
+            msg.incident_id = active.id
+            record(session, active.id, "merged", f"{m.sender}：{m.text}", actor=m.sender)
+            await session.commit()
+            await _respond_followup(session, group, active, m)
+            await session.commit()
+            return active
         await session.commit()
         return None
 
@@ -230,8 +316,11 @@ async def handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident |
         existing.related_messages += 1
         msg.incident_id = existing.id
         record(session, existing.id, "merged", f"{m.sender}：{m.text}", actor=m.sender)
+        await session.commit()  # 先落库，让并发进来的排查能看到这条消息
         if c.request_id and c.request_id != existing.request_id:
             await _reinvestigate(session, group, existing, c, m)
+        else:
+            await _respond_followup(session, group, existing, m)
         await session.commit()
         return existing
 
@@ -250,6 +339,7 @@ async def handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident |
 
     ack = await llm.stylize("收到，正在排查，稍等～", group.style, "ack")
     await presend.enqueue(session, group, ack, 100, "ack", incident.id, reply_to=m.message_id)
+    await session.commit()
 
     await _investigate(session, group, incident, c, m.text, m.message_id, wf)
     await session.commit()

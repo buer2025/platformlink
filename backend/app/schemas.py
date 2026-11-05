@@ -194,3 +194,8 @@ class KnowledgeOut(KnowledgeIn):
     hits: int
     created_at: datetime
     updated_at: datetime
+
+
+class StylePreviewIn(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+    style: dict | None = None  # 不传则用群当前的风格（用于编辑中实时试）
