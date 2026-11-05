@@ -172,13 +172,32 @@ async def integrate(draft: str, conversation: str, context: str) -> str:
     return r.text if r else draft
 
 
-async def followup(conversation: str, new_text: str, context: str) -> str:
-    """回复已发出后，客户追问 / 催促时的跟进回复。"""
-    r = await _parse(FOLLOWUP, f"客户消息（按时间）:\n{conversation}\n\n客户最新这条: {new_text}\n\n处理进展:\n{context}",
-                     Rewrite, effort="low")
-    if r is None:
-        return "" if _NO_REPLY.match(new_text.strip()) else "收到，这边还在跟进，有进展第一时间同步您～"
-    return r.text.strip()
+class FollowupDecision(BaseModel):
+    should_reply: bool = Field(description="这条消息是否需要我们回复")
+    problem_persists: bool = Field(description="客户是否在说问题还在 / 又出现了 / 没解决")
+    reason: str = Field(description="一句话说明判断理由")
+    text: str = Field(description="回复内容；不需要回复时为空")
+
+
+PERSISTS = re.compile(r"(还是|依然|仍然|又|再次|没好|没解决|不行|还在报|还报)")
+
+
+async def followup(conversation: str, new_text: str, context: str, quoted: str = "") -> FollowupDecision:
+    """客户在已有事件里又说话（可能引用了某条消息）：判断要不要回、问题是否还在，并起草回复。"""
+    q = f"\n客户引用的消息: 「{quoted}」" if quoted else ""
+    r = await _parse(
+        FOLLOWUP + "\n先判断：这条是在继续追问/反馈问题，还是致谢、闲聊、玩笑。只有前者需要回复。"
+        "如果客户引用了我们的某条回复，要结合被引用的内容理解他在问什么。",
+        f"客户消息（按时间）:\n{conversation}\n\n客户最新这条: {new_text}{q}\n\n处理进展:\n{context}",
+        FollowupDecision, effort="low")
+    if r is not None:
+        if not r.should_reply:
+            r.text = ""
+        return r
+    if _NO_REPLY.match(new_text.strip()):
+        return FollowupDecision(should_reply=False, problem_persists=False, reason="致谢 / 确认", text="")
+    return FollowupDecision(should_reply=True, problem_persists=bool(PERSISTS.search(new_text)),
+                            reason="规则兜底", text="收到，这边还在跟进，有进展第一时间同步您～")
 
 
 _NO_REPLY = re.compile(

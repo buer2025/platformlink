@@ -11,7 +11,7 @@ import { Avatar, Badge, Button, Card, Empty, Kbd, listItem, PageHeader, ScoreRin
 
 export const purposeLabel: Record<string, string> = {
   ack: '安抚回复', customer_reply: '客户回复', supplier_ticket: '供应商转交',
-  supplier_remind: '供应商催办', quota_push: '催量',
+  supplier_remind: '供应商催办', quota_push: '催量', escalation: '升级人工',
 }
 const statusInfo: Record<Outbound['status'], [string, Tone]> = {
   pending: ['倒计时', 'info'], needs_approval: ['待确认', 'warn'], sending: ['发送中', 'info'],
@@ -93,8 +93,8 @@ function Row({ o, now, selected, editing, setEditing, onSelect, toCustomer }: {
         <div className="min-w-0 flex-1">
           <div className="flex min-h-7 flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px]">
             {toCustomer
-              ? <span className="font-medium text-fg-2">{o.purpose === 'ack' ? '先安抚客户' : '回复客户'}</span>
-              : <><span className="text-fg-3">转交给</span><span className="font-medium text-fg">{o.group_name}</span></>}
+              ? <span className="font-medium text-fg-2">{o.purpose === 'ack' ? '先安抚客户' : o.purpose === 'escalation' ? '拉负责人进来' : '回复客户'}</span>
+              : <><span className="text-fg-3">{o.purpose === 'escalation' ? '升级给' : '转交给'}</span><span className="font-medium text-fg">{o.group_name}</span></>}
             {o.purpose === 'ack' && !editing && <span className="truncate text-fg">「{o.text}」</span>}
             {o.mentions.length > 0 && <span className="text-fg-3">{o.mentions.map((m) => `@${m}`).join(' ')}</span>}
             <span className="ml-auto flex items-center gap-2">

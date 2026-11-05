@@ -163,7 +163,8 @@ async def delete_staff(staff_id: int, s: AsyncSession = Session):
 
 # ---------- 事件 ----------
 
-INCIDENT_TIMES = ("created_at", "ticket_sent_at", "supplier_replied_at", "resolved_at")
+INCIDENT_TIMES = ("created_at", "ticket_sent_at", "supplier_replied_at", "resolved_at",
+                  "escalated_at")
 
 
 @admin.get("/incidents", response_model=list[IncidentOut])

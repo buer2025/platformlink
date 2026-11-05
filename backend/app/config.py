@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     incident_merge_minutes: int = 30
     # 未解决事件在多久内承接客户的追问 / 催促（持续对话）
     conversation_hours: int = 6
+    # 升级人工：Agent 准确率低于此值，或客户追问达到次数时 @ 内部负责人
+    escalate_below_confidence: int = 50
+    escalate_after_followups: int = 2
     # 供应商转交单无回复多久后催办，最多催几次
     supplier_remind_minutes: int = 30
     supplier_max_reminders: int = 2

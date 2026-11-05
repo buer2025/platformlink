@@ -43,6 +43,9 @@ const eventMeta: Record<string, [string, LucideIcon, Tone]> = {
   followup: ['跟进回复', MessageCircle, 'accent' as Tone],
   no_reply: ['无需回复', Check, 'slate'],
   queued_for_integration: ['等待整合', Timer, 'slate'],
+  quoted: ['引用追问', MessageCircle, 'slate'],
+  reopened: ['重新打开', RotateCcw, 'warn'],
+  escalated: ['升级人工', CircleAlert, 'bad'],
   note: ['备注', NotebookPen, 'slate'],
   knowledge_saved: ['沉淀知识', BookPlus, 'ok'],
 }
@@ -170,6 +173,7 @@ function IncidentDrawer({ i, groups, workflows, onClose }: {
               <div className="text-[11px] tracking-wide text-fg-3">AGENT 判断</div>
               <div className="mt-0.5 text-[17px] font-semibold tracking-tight">{verdict(i)}</div>
               <div className="mt-0.5 text-xs text-fg-3">{scoreRule(i.confidence)}</div>
+              {i.escalated_at && <div className="mt-1.5"><Badge tone="bad" dot>已升级人工 · {i.escalation_reason}</Badge></div>}
             </div>
           </div>
           {/* 第二层：依据（默认折叠到 4 行） */}

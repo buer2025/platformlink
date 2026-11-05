@@ -4,7 +4,7 @@ import logging
 import re
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent import harness, llm, logs
@@ -15,6 +15,7 @@ from app.models import (
     Group,
     GroupKind,
     Incident,
+    IncidentEvent,
     IncidentStatus,
     Message,
     Outbound,
@@ -24,6 +25,7 @@ from app.models import (
     Workflow,
 )
 from app.services import knowledge, presend
+from app.services.escalation import escalate
 from app.services.events import record
 
 log = logging.getLogger(__name__)
@@ -197,6 +199,8 @@ async def _investigate(session: AsyncSession, group: Group, incident: Incident,
            f"责任方 {f.responsible}，准确率 {f.confidence}：{f.evidence}"
            + (f"\n自检：{f.self_check}" if f.self_check else ""))
 
+    if f.responsible == "unknown" or f.confidence < settings.escalate_below_confidence:
+        await escalate(session, group, incident, f"Agent 无法确定原因（准确率 {f.confidence}）")
     reply = f.customer_reply
     conv2, latest, newest = await _conversation(session, incident)
     if newest > seen:  # 排查期间客户又发了消息 → 一次性回复全部
@@ -220,6 +224,7 @@ async def _investigate(session: AsyncSession, group: Group, incident: Incident,
         else:
             incident.evidence += "\n（未找到对应的供应商群，需人工转交）"
             record(session, incident.id, "no_supplier", "未找到对应的供应商群，需人工转交")
+            await escalate(session, group, incident, "判断是供应商问题，但没有找到对应的供应商群")
 
 
 
@@ -243,7 +248,7 @@ async def _reinvestigate(session: AsyncSession, group: Group, incident: Incident
 
 
 async def _respond_followup(session: AsyncSession, group: Group, incident: Incident,
-                           m: InboundMessage) -> None:
+                           m: InboundMessage, quoted: str = "") -> None:
     """同一事件里客户又发了消息：未发出的回复改写成整合版；已发出的则针对新消息跟进。"""
     replies = (await session.scalars(select(Outbound).where(
         Outbound.incident_id == incident.id, Outbound.purpose == "customer_reply",
@@ -256,6 +261,9 @@ async def _respond_followup(session: AsyncSession, group: Group, incident: Incid
     force_confirm = bool(wf and wf.automation == "confirm")
     conv, latest, _ = await _conversation(session, incident)
     last = replies[0] if replies else None
+    if llm._NO_REPLY.match(m.text.strip()):  # 「好的」「谢谢」：不打断待发回复，也不回复
+        record(session, incident.id, "no_reply", f"「{m.text}」无需回复")
+        return
     if last and last.status in presend.RETRYABLE:
         text = await llm.integrate(last.text, conv, _progress(incident))
         text = await llm.stylize(text, group.style, "customer_reply")
@@ -264,15 +272,51 @@ async def _respond_followup(session: AsyncSession, group: Group, incident: Incid
                               reply_to=latest, force_confirm=force_confirm)
         record(session, incident.id, "integrated", "客户追加了消息，未发出的回复已改写为整合版")
         return
-    # 已经回复过：针对这条新消息跟进当前进展
-    text = await llm.followup(conv, m.text, _progress(incident))
-    if not text:
-        record(session, incident.id, "no_reply", f"「{m.text}」无需回复")
+    # 已经回复过：判断这条是不是在继续追问，是才回复
+    d = await llm.followup(conv, m.text, _progress(incident), quoted)
+    if d.problem_persists and incident.status == IncidentStatus.resolved:
+        incident.status = IncidentStatus.investigating
+        incident.resolved_at = None
+        incident.escalated_at = None  # 重新打开后允许再次升级
+        record(session, incident.id, "reopened", f"客户反馈问题仍存在，事件重新打开：{d.reason}")
+    if d.problem_persists:
+        await escalate(session, group, incident, f"已回复过，客户反馈问题仍未解决：「{m.text}」")
+    if not d.should_reply or not d.text:
+        record(session, incident.id, "no_reply", f"「{m.text}」无需回复：{d.reason}")
         return
-    text = await llm.stylize(text, group.style, "customer_reply")
+    text = await llm.stylize(d.text, group.style, "customer_reply")
     await presend.enqueue(session, group, text, min(incident.confidence, 85), "customer_reply",
                           incident.id, reply_to=m.message_id, force_confirm=force_confirm)
-    record(session, incident.id, "followup", "回复发出后客户追问，已起草跟进回复")
+    record(session, incident.id, "followup", f"客户{'引用消息' if quoted else ''}追问，已起草跟进回复：{d.reason}")
+    asked = await session.scalar(select(func.count()).select_from(IncidentEvent).where(
+        IncidentEvent.incident_id == incident.id, IncidentEvent.kind == "followup"))
+    if asked + 1 >= settings.escalate_after_followups:
+        await escalate(session, group, incident, f"客户已追问 {asked + 1} 次")
+
+
+async def _handle_quote(session: AsyncSession, group: Group, msg: Message, m: InboundMessage,
+                        quoted: Message) -> Incident | None:
+    """引用了某个事件里的消息：归到那个事件，判断是不是在继续追问。"""
+    incident = await session.get(Incident, quoted.incident_id)
+    if incident is None:
+        await session.commit()
+        return None
+    msg.incident_id = incident.id
+    incident.related_messages += 1
+    who = "我方回复" if quoted.from_us else "客户之前的消息"
+    record(session, incident.id, "quoted", f"{m.sender} 引用了{who}「{quoted.text[:80]}」：{m.text}",
+           actor=m.sender)
+    await session.commit()
+    c = await llm.classify(f"{m.text}\n（引用了：「{quoted.text}」）")
+    if c.request_id and c.request_id != incident.request_id and incident.responsible:
+        if incident.status == IncidentStatus.resolved:
+            incident.status, incident.resolved_at = IncidentStatus.investigating, None
+            record(session, incident.id, "reopened", "客户引用旧消息并给出新的 request_id，事件重新打开")
+        await _reinvestigate(session, group, incident, c, m)
+    else:
+        await _respond_followup(session, group, incident, m, quoted=quoted.text)
+    await session.commit()
+    return incident
 
 
 async def handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident | None:
@@ -298,7 +342,25 @@ async def handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident |
         await session.commit()
         return None
 
-    c = await llm.classify(m.text)
+    # 客户引用了某条消息：先看被引用的消息属于哪个事件
+    quoted = None
+    if msg.reply_to_external_id:
+        quoted = await session.scalar(select(Message).where(
+            Message.group_id == group.id, Message.external_id == msg.reply_to_external_id))
+    if quoted is not None and quoted.incident_id:
+        return await _handle_quote(session, group, msg, m, quoted)
+
+    # 第 0 层（不调用 AI）：「好的」「谢谢」「👍」这类确认语，只记录不处理
+    if quoted is None and llm._NO_REPLY.match(m.text.strip()):
+        if active := await _active_incident(session, group):
+            msg.incident_id = active.id
+            active.related_messages += 1
+            record(session, active.id, "no_reply", f"「{m.text}」无需回复", actor=m.sender)
+        await session.commit()
+        return None
+
+    # 第 1 层：轻量分诊（低思考强度，判断是不是问题、抽取字段）
+    c = await llm.classify(m.text if quoted is None else f"{m.text}\n（引用了：「{quoted.text}」）")
     if not c.is_issue:
         # 持续对话：群里有未解决的事件时，追问 / 催促 / 致谢都接着这个事件聊
         if active := await _active_incident(session, group):

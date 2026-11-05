@@ -87,6 +87,8 @@ class IncidentOut(BaseModel):
     lookup_result: str
     knowledge_ids: list[int]
     resolved_at: datetime | None
+    escalated_at: datetime | None
+    escalation_reason: str
     created_at: datetime
 
 

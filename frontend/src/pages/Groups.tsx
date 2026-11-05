@@ -171,7 +171,7 @@ function Editor({ g, onClose }: { g: Group | undefined; onClose: () => void }) {
           <Section title="基本">
             <Field label="群名称"><Input value={f.name} onChange={ev('name')} /></Field>
             <Field label="类型"><Select value={f.kind} onChange={ev('kind')}>
-              {Object.entries(kindLabel).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</Select></Field>
+              {Object.entries(kindLabel).map(([k, v]) => <option key={k} value={k}>{k === 'internal' ? '内部群（升级人工时在这里 @ 负责人）' : v}</option>)}</Select></Field>
             <Field label="自动化" hint="只观察：Agent 不发言"><Select value={f.automation} onChange={ev('automation')}>
               {Object.entries(autoLabel).map(([k, [v]]) => <option key={k} value={k}>{v}</option>)}</Select></Field>
             <Field label="额外倒计时（秒）" hint="VIP 群可加长"><Input inputMode="numeric" value={f.extra_delay_seconds} onChange={ev('extra_delay_seconds')} /></Field>
@@ -181,7 +181,7 @@ function Editor({ g, onClose }: { g: Group | undefined; onClose: () => void }) {
             <Field label="等级"><Input value={f.level} onChange={ev('level')} placeholder="VIP / KA / 主力供应商" /></Field>
             <Field label="涉及模型" hint={f.kind === 'supplier' ? '供应商群按此路由' : ''}><TagInput tone="violet" value={f.models} onChange={set('models')} placeholder="seedance" /></Field>
             <Field label="对接人" hint="转交时 @ 的账号"><TagInput value={f.contacts} onChange={set('contacts')} /></Field>
-            <Field label="负责人"><Input value={f.owner} onChange={ev('owner')} placeholder="负责人" /></Field>
+            <Field label="负责人" hint="Agent 处理不了时 @ 他"><Input value={f.owner} onChange={ev('owner')} placeholder="我方人员姓名或平台账号" /></Field>
             <Field label="备份负责人"><Input value={f.backup_owner} onChange={ev('backup_owner')} placeholder="备份" /></Field>
           </Section>
           <Section icon={<Database size={14} />} title="日志库绑定" desc={f.kind === 'supplier'

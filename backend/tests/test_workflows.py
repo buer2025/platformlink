@@ -314,3 +314,75 @@ async def test_style_learn_and_preview(client, fake, monkeypatch):  # noqa: F811
                           json={"text": "已经在处理了", "style": {"address": "王总"}})
     assert r.json()["text"] == "王总，已经在处理了"
     assert "王总" in llm.describe_style(body["profile"])
+
+
+async def test_quote_routes_to_that_incident(client, fake):  # noqa: F811
+    """引用我方回复：追问 → 回复并引用；致谢 → 不回；引用已解决事件说又坏了 → 重新打开。"""
+    await setup_groups(client)
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 71, "seedance 报错了"))
+    reply = next(o for o in await outbound(client) if o["purpose"] == "customer_reply")
+    await client.post(f"/api/outbound/{reply['id']}/send")
+    ours = f"out{len(fake.sent)}"  # 我方回复在平台上的消息 ID
+    inc = (await client.get("/api/incidents")).json()[0]
+    await client.patch(f"/api/incidents/{inc['id']}", json={"status": "resolved"})
+
+    # 引用致谢：不回复，事件保持已解决
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 72, "👍", reply_to=ours))
+    assert (await client.get(f"/api/incidents/{inc['id']}")).json()["status"] == "resolved"
+    # 引用说还是不行：重新打开并跟进，回复引用这条追问
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 73, "还是不行啊", reply_to=ours))
+    cur = (await client.get(f"/api/incidents/{inc['id']}")).json()
+    assert cur["status"] == "investigating" and cur["related_messages"] == 3
+    ev = [e["kind"] for e in (await client.get(f"/api/incidents/{inc['id']}/events")).json()]
+    assert ev.count("quoted") == 2 and "reopened" in ev and "no_reply" in ev and "followup" in ev
+    assert len((await client.get("/api/incidents")).json()) == 1  # 没有开新事件
+
+
+async def test_quote_unrelated_message_uses_context(client, fake):  # noqa: F811
+    await setup_groups(client)
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 81, "今天天气不错"))
+    assert (await client.get("/api/incidents")).json() == []
+    # 引用一条与事件无关的消息，但新消息本身是问题 → 正常分诊
+    await client.post("/api/webhooks/telegram", headers=TG,
+                      json=tg(100, 82, "对了 seedance 报错了", reply_to=81))
+    assert len((await client.get("/api/incidents")).json()) == 1
+
+
+async def test_escalation_to_internal_group(client, fake):  # noqa: F811
+    """Agent 说不清原因 → 在内部群 @ 负责人（用我方人员姓名换成平台账号），只升级一次。"""
+    cid, _ = await setup_groups(client)
+    await client.post("/api/staff", json={"name": "小王", "platform": "telegram", "account": "wang_tg"})
+    await client.patch(f"/api/groups/{cid}", json={"owner": "小王", "backup_owner": "lee"})
+    await client.post("/api/simulate", json={"chat_id": "900", "chat_name": "技术支持内部群", "text": "hi"})
+    g = next(x for x in (await client.get("/api/groups")).json() if x["external_id"] == "900")
+    await client.patch(f"/api/groups/{g['id']}", json={"kind": "internal"})  # 仍是只观察
+
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 91, "seedance 报错了"))
+    esc = [o for o in await outbound(client) if o["purpose"] == "escalation"]
+    assert len(esc) == 1 and esc[0]["group_id"] == g["id"]
+    assert esc[0]["mentions"] == ["wang_tg", "lee"] and esc[0]["status"] == "pending"
+    assert "需要人工" in esc[0]["text"] and "准确率 40" in esc[0]["text"]
+    inc = (await client.get("/api/incidents")).json()[0]
+    assert inc["escalated_at"] and "准确率" in inc["escalation_reason"]
+    # 再追问也不会重复升级
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 92, "怎么样了"))
+    assert len([o for o in await outbound(client) if o["purpose"] == "escalation"]) == 1
+
+
+async def test_escalation_in_customer_group_without_internal(client, fake):  # noqa: F811
+    cid, _ = await setup_groups(client)
+    await client.patch(f"/api/groups/{cid}", json={"owner": "zhang"})
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 95, "seedance 报错了"))
+    esc = next(o for o in await outbound(client) if o["purpose"] == "escalation")
+    assert esc["group_id"] == cid and esc["mentions"] == ["zhang"] and "负责的同事" in esc["text"]
+
+
+async def test_acks_skip_ai(client, fake, monkeypatch):  # noqa: F811
+    from app.agent import llm
+    await setup_groups(client)
+
+    async def boom(_):
+        raise AssertionError("确认语不应调用分诊")
+    monkeypatch.setattr(llm, "classify", boom)
+    for i, t in enumerate(["好的", "👍", "收到~", "谢谢啦"]):
+        await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 96 + i, t))

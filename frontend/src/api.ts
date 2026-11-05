@@ -55,6 +55,8 @@ export type Incident = {
   lookup_result: string
   knowledge_ids: number[]
   resolved_at: string | null
+  escalated_at: string | null
+  escalation_reason: string
   created_at: string
 }
 

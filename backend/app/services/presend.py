@@ -11,6 +11,7 @@ from app.im.registry import get_adapter
 from app.models import (
     AutomationMode,
     Group,
+    GroupKind,
     Incident,
     IncidentStatus,
     Message,
@@ -36,9 +37,11 @@ def aware(dt: datetime | None) -> datetime | None:
 
 def delay_for(score: int, group: Group, purpose: str) -> int | None:
     """返回自动发送前的倒计时秒数；None 表示必须人工确认。"""
+    if purpose == "escalation" and group.kind == GroupKind.internal:
+        return 0  # 内部群里 @ 负责人，不需要审批
     if group.automation == AutomationMode.observe:
         return None
-    if purpose == "ack":  # 低风险安抚消息，直接发
+    if purpose in ("ack", "escalation"):  # 低风险安抚消息，直接发
         return 0 if group.automation == AutomationMode.auto else None
     if group.automation == AutomationMode.confirm:
         return None

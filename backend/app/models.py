@@ -169,6 +169,9 @@ class Incident(Base):
     lookup_result: Mapped[str] = mapped_column(Text, default="")
     knowledge_ids: Mapped[list[int]] = mapped_column(JSON, default=list)  # 本次参考的知识
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # 已 @ 内部负责人的时间（同一事件只升级一次，重新打开后可再次升级）
+    escalated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    escalation_reason: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
