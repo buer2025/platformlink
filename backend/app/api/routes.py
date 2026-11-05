@@ -1,4 +1,5 @@
 import uuid
+from datetime import timedelta
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy import select
@@ -7,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent import llm, logs
 from app.auth import require_admin, verify_webhook
+from app.config import settings
 from app.db import SessionLocal, get_session
 from app.im.base import InboundMessage
 from app.im.registry import get_adapter
@@ -26,6 +28,7 @@ from app.models import (
     Workflow,
 )
 from app.schemas import (
+    DraftIn,
     GroupOut,
     GroupUpdate,
     IncidentEventOut,
@@ -34,6 +37,7 @@ from app.schemas import (
     KnowledgeIn,
     KnowledgeOut,
     LookupTest,
+    ManualSendIn,
     MessageOut,
     OutboundEdit,
     OutboundOut,
@@ -46,7 +50,7 @@ from app.schemas import (
     WorkflowIn,
     WorkflowOut,
 )
-from app.services import knowledge, memory, presend
+from app.services import knowledge, memory, pipeline, presend
 from app.services.events import record
 from app.services.pipeline import handle_inbound
 
@@ -137,6 +141,61 @@ async def delete_memory(memory_id: int, s: AsyncSession = Session):
     return {"ok": True}
 
 
+@admin.post("/groups/{group_id}/send", response_model=OutboundOut)
+async def manual_send(group_id: int, body: ManualSendIn, s: AsyncSession = Session):
+    """管理员从后台通过机器人发消息（原样发送，不经 AI 改写）。"""
+    g = await s.get(Group, group_id)
+    if not g:
+        raise HTTPException(404, "群不存在")
+    reply_to = ""
+    if body.reply_to_message_id:
+        quoted = await s.get(Message, body.reply_to_message_id)
+        if not quoted or quoted.group_id != g.id:
+            raise HTTPException(422, "引用的消息不在这个群里")
+        reply_to = quoted.external_id
+    actor = body.actor.strip() or "管理员"
+    o = await presend.enqueue(s, g, body.text.strip(), 100, "manual", body.incident_id,
+                              reply_to=reply_to, mentions=body.mentions, force_confirm=True)
+    o.edited_by = actor
+    if body.incident_id:
+        inc = await s.get(Incident, body.incident_id)
+        if inc and inc.status != IncidentStatus.resolved:
+            # 人工发过话：AI 让位，避免和人说重复的话
+            inc.human_until = presend.utcnow() + timedelta(minutes=settings.human_takeover_minutes)
+            inc.human_by = actor
+            for p in (await s.scalars(select(Outbound).where(
+                    Outbound.incident_id == inc.id, Outbound.group_id == g.id,
+                    Outbound.status == OutboundStatus.pending))).all():
+                p.status, p.send_at = OutboundStatus.needs_approval, None
+    await s.commit()
+    await presend.deliver(s, o, presend.RETRYABLE)
+    await s.refresh(o)
+    if o.status == OutboundStatus.failed:
+        raise HTTPException(502, f"发送失败：{o.error}")
+    return _out(o)
+
+
+@admin.post("/groups/{group_id}/draft")
+async def ai_draft(group_id: int, body: DraftIn, s: AsyncSession = Session):
+    """AI 帮我写：根据对话和进展起草一条，管理员修改后再发。"""
+    g = await s.get(Group, group_id)
+    if not g:
+        raise HTTPException(404, "群不存在")
+    context = ""
+    if body.incident_id and (inc := await s.get(Incident, body.incident_id)):
+        conv, _, _ = await pipeline._conversation(s, inc)
+        context = f"客户消息:\n{conv}\n\n处理进展:\n{pipeline._progress(inc)}"
+    else:
+        rows = (await s.scalars(select(Message).where(Message.group_id == g.id)
+                                .order_by(Message.id.desc()).limit(15))).all()
+        context = "\n".join(f"{'[我方]' if m.from_us else '[客户]'} {m.text}" for m in reversed(rows))
+    intent = body.intent.strip() or "根据当前进展，回复客户最新的消息"
+    text = await llm.compose(intent, context, g.style or {}, body.intent.strip() or "")
+    if not text:
+        raise HTTPException(503, "AI 暂时不可用")
+    return {"text": text}
+
+
 @admin.get("/parties", response_model=list[PartyOut])
 async def list_parties(s: AsyncSession = Session):
     return (await s.scalars(select(Party).order_by(Party.id))).all()
@@ -183,7 +242,7 @@ async def delete_staff(staff_id: int, s: AsyncSession = Session):
 # ---------- 事件 ----------
 
 INCIDENT_TIMES = ("created_at", "ticket_sent_at", "supplier_replied_at", "resolved_at",
-                  "escalated_at")
+                  "escalated_at", "human_until")
 
 
 @admin.get("/incidents", response_model=list[IncidentOut])

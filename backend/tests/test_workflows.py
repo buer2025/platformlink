@@ -447,3 +447,62 @@ async def test_session_lifecycle_memory(client, fake, monkeypatch):  # noqa: F81
     assert len(mems) == 2
     await client.delete(f"/api/memories/{mems[0]['id']}")
     assert len((await client.get(f"/api/groups/{cid}/memories")).json()) == 1
+
+
+async def test_manual_send_and_human_takeover(client, fake):  # noqa: F811
+    """管理员后台发消息（可引用）→ 原样发送、记到事件；同事在群里亲自回复 → AI 让位。"""
+    cid, _ = await setup_groups(client)
+    await client.post("/api/staff", json={"name": "小王", "platform": "telegram", "account": "wang"})
+    await client.patch(f"/api/groups/{cid}", json={"automation": "auto"})
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 121, "seedance 一直 429，限流太严重了"))
+    inc = (await client.get("/api/incidents")).json()[0]
+    customer_msg = next(m for m in (await client.get(f"/api/incidents/{inc['id']}/messages")).json()
+                        if not m["from_us"])
+
+    # 1) 后台人工发送，引用客户那条
+    r = await client.post(f"/api/groups/{cid}/send", json={
+        "text": "我是小王，这个我来跟进", "incident_id": inc["id"],
+        "reply_to_message_id": customer_msg["id"], "actor": "小王"})
+    assert r.status_code == 200 and r.json()["status"] == "sent" and r.json()["purpose"] == "manual"
+    assert fake.sent[-1][1] == "我是小王，这个我来跟进"
+    cur = (await client.get(f"/api/incidents/{inc['id']}")).json()
+    assert cur["human_by"] == "小王" and cur["human_until"]
+    msgs = (await client.get(f"/api/incidents/{inc['id']}/messages")).json()
+    assert any(m["sender"] == "后台·小王" for m in msgs)
+
+    # 2) 人工接管期间，AI 新起草的回复不会自动发
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 122, "seedance 一直 429，request_id: req-x-1"))
+    pend = [o for o in await outbound(client) if o["purpose"] == "customer_reply" and o["status"] != "cancelled"]
+    assert pend and all(o["status"] == "needs_approval" for o in pend)
+
+
+async def test_staff_reply_in_group_takes_over(client, fake):  # noqa: F811
+    _cid, _ = await setup_groups(client)
+    await client.post("/api/staff", json={"name": "小王", "platform": "telegram", "account": "wang"})
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 131, "seedance 报错了"))
+    # 让一条 AI 回复处于倒计时
+    reply = next(o for o in await outbound(client) if o["purpose"] == "ack")
+    assert reply["status"] == "pending"
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 132, "我看下哈", user="wang"))
+    inc = (await client.get("/api/incidents")).json()[0]
+    assert inc["human_by"] == "小王"
+    ack = next(o for o in await outbound(client) if o["id"] == reply["id"])
+    assert ack["status"] == "needs_approval"
+    ev = [e["kind"] for e in (await client.get(f"/api/incidents/{inc['id']}/events")).json()]
+    assert "human_takeover" in ev
+
+
+async def test_ai_draft(client, fake, monkeypatch):  # noqa: F811
+    from app.agent import llm
+    cid, _ = await setup_groups(client)
+    await client.post("/api/webhooks/telegram", headers=TG, json=tg(100, 141, "seedance 报错了"))
+    inc = (await client.get("/api/incidents")).json()[0]
+    seen = {}
+
+    async def fake_compose(intent, context, style, fallback):
+        seen.update(intent=intent, context=context)
+        return "草稿"
+    monkeypatch.setattr(llm, "compose", fake_compose)
+    r = await client.post(f"/api/groups/{cid}/draft", json={"incident_id": inc["id"], "intent": "告诉他在扩容"})
+    assert r.json()["text"] == "草稿" and seen["intent"] == "告诉他在扩容"
+    assert "seedance 报错了" in seen["context"] and "处理进展" in seen["context"]

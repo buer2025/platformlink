@@ -301,6 +301,28 @@ async def _respond_followup(session: AsyncSession, group: Group, incident: Incid
         await escalate(session, group, incident, f"客户已追问 {asked + 1} 次")
 
 
+async def _human_takeover(session: AsyncSession, group: Group, msg: Message, who: str) -> None:
+    """我方同事在群里亲自回复：AI 让位一段时间，倒计时中的 AI 消息改为等人工确认。"""
+    incident = await _active_incident(session, group)
+    if incident is None or incident.status == IncidentStatus.resolved:
+        return
+    msg.incident_id = incident.id
+    staff_name = await session.scalar(select(Staff.name).where(
+        Staff.platform == group.platform, Staff.account == who)) or who
+    first = not (incident.human_until and presend.aware(incident.human_until) > presend.utcnow())
+    incident.human_until = presend.utcnow() + timedelta(minutes=settings.human_takeover_minutes)
+    incident.human_by = staff_name
+    held = (await session.scalars(select(Outbound).where(
+        Outbound.incident_id == incident.id, Outbound.group_id == group.id,
+        Outbound.status == OutboundStatus.pending))).all()
+    for o in held:
+        o.status, o.send_at = OutboundStatus.needs_approval, None
+    if first or held:
+        record(session, incident.id, "human_takeover",
+               f"{staff_name} 在群里亲自回复，AI 暂停自动发送 {settings.human_takeover_minutes} 分钟"
+               + (f"，{len(held)} 条倒计时中的消息改为等你确认" if held else ""), actor=staff_name)
+
+
 async def _handle_quote(session: AsyncSession, group: Group, msg: Message, m: InboundMessage,
                         quoted: Message) -> Incident | None:
     """引用了某个事件里的消息：归到那个事件，判断是不是在继续追问。"""
@@ -338,6 +360,8 @@ async def handle_inbound(session: AsyncSession, m: InboundMessage) -> Incident |
     session.add(msg)
     await session.flush()
 
+    if staff and not m.is_bot and group.kind == GroupKind.customer:
+        await _human_takeover(session, group, msg, m.sender)
     if staff or group.automation == AutomationMode.observe:
         await session.commit()
         return None

@@ -64,6 +64,11 @@ async def enqueue(
 ) -> Outbound:
     score = max(0, min(100, score))
     delay = None if force_confirm and purpose != "ack" else delay_for(score, group, purpose)
+    takeover = ""
+    if incident_id and purpose not in ("manual", "escalation"):
+        inc = await session.get(Incident, incident_id)
+        if inc and inc.human_until and aware(inc.human_until) > utcnow():
+            delay, takeover = None, f"，{inc.human_by or '同事'}正在人工处理"  # 人工接管期间 AI 不自动发
     item = Outbound(
         group_id=group.id,
         incident_id=incident_id,
@@ -78,7 +83,7 @@ async def enqueue(
     session.add(item)
     await session.flush()
     name = PURPOSE_NAMES.get(purpose, purpose)
-    plan = "需人工审批" if delay is None else ("立即发送" if delay == 0 else f"{delay} 秒后自动发送")
+    plan = ("需人工审批" if delay is None else ("立即发送" if delay == 0 else f"{delay} 秒后自动发送")) + takeover
     record(session, incident_id, "queued", f"{name}进入预发队列（评分 {score}，{plan}）→ {group.name}")
     return item
 
@@ -115,7 +120,9 @@ async def deliver(session: AsyncSession, item: Outbound, allowed=OPEN) -> bool:
     item.status = OutboundStatus.sent
     item.sent_at = utcnow()
     item.error = ""
-    session.add(Message(group_id=group.id, external_id=ext_id, sender="platformlink",
+    # 人工从后台发的消息记成那位同事（用于风格学习）；AI 发的记为 platformlink
+    sender = f"后台·{item.edited_by}" if item.purpose == "manual" and item.edited_by else "platformlink"
+    session.add(Message(group_id=group.id, external_id=ext_id, sender=sender,
                         text=item.text, reply_to_external_id=item.reply_to_external_id,
                         from_us=True, incident_id=item.incident_id))
     record(session, item.incident_id, "sent",

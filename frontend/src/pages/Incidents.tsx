@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import {
-  BookPlus, Bot, Check, ChevronRight, CircleAlert, Database, GitMerge, Lightbulb, MessageCircle,
+  BookPlus, Bot, CornerUpLeft, Check, ChevronRight, CircleAlert, Database, GitMerge, Lightbulb, MessageCircle,
   NotebookPen, Pencil, type LucideIcon, RotateCcw, Send, Sparkles, Timer, Wrench, X, Zap,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
@@ -16,6 +16,7 @@ import { useHotkeys, useListNav, useNow } from '../hooks'
 import {
   Badge, Button, Card, Drawer, Empty, Input, Kbd, listItem, PageHeader, ScoreRing, Segmented, Skeleton, type Tone,
 } from '../ui'
+import { Composer } from '../components/Composer'
 import { KnowledgeEditor } from './Knowledge'
 
 const statusLabel: Record<Incident['status'], [string, Tone]> = {
@@ -48,6 +49,7 @@ const eventMeta: Record<string, [string, LucideIcon, Tone]> = {
   escalated: ['升级人工', CircleAlert, 'bad'],
   auto_closed: ['自动关闭', Timer, 'slate'],
   memory_saved: ['沉淀记忆', Lightbulb, 'ok'],
+  human_takeover: ['人工接管', Pencil, 'info'],
   note: ['备注', NotebookPen, 'slate'],
   knowledge_saved: ['沉淀知识', BookPlus, 'ok'],
 }
@@ -129,6 +131,8 @@ function IncidentDrawer({ i, groups, workflows, onClose }: {
   const [note, setNote] = useState('')
   const [tab, setTab] = useState<'timeline' | 'messages'>('timeline')
   const [draft, setDraft] = useState<Partial<Knowledge> | null>(null)
+  const [quote, setQuote] = useState<Message | null>(null)
+  const now = useNow(30000)
   const id = i?.id
   const { data: events = [] } = useQuery({ queryKey: ['events', id], queryFn: () => api<IncidentEvent[]>(`/incidents/${id}/events`), enabled: !!id, refetchInterval: 4000 })
   const { data: msgs = [] } = useQuery({ queryKey: ['incident-msgs', id], queryFn: () => api<Message[]>(`/incidents/${id}/messages`), enabled: !!id })
@@ -175,6 +179,9 @@ function IncidentDrawer({ i, groups, workflows, onClose }: {
               <div className="text-[11px] tracking-wide text-fg-3">AGENT 判断</div>
               <div className="mt-0.5 text-[17px] font-semibold tracking-tight">{verdict(i)}</div>
               <div className="mt-0.5 text-xs text-fg-3">{scoreRule(i.confidence)}</div>
+              {i.human_until && Date.parse(i.human_until) > now && (
+                <div className="mt-1.5"><Badge tone="info" dot>{i.human_by || '同事'} 正在人工处理 · AI 暂停自动发送</Badge></div>
+              )}
               {i.escalated_at && <div className="mt-1.5"><Badge tone="bad" dot>已升级人工 · {i.escalation_reason}</Badge></div>}
             </div>
           </div>
@@ -198,17 +205,25 @@ function IncidentDrawer({ i, groups, workflows, onClose }: {
           ) : (
             <ul className="space-y-2.5">
               {msgs.map((m) => (
-                <li key={m.id} className={clsx('flex', m.from_us && 'justify-end')}>
+                <li key={m.id} className={clsx('group/msg flex items-center gap-1.5', m.from_us && 'flex-row-reverse')}>
                   <div className={clsx('max-w-[85%] rounded-2xl px-3 py-2 text-[13px]', m.from_us ? 'rounded-br-md bg-accent text-accent-fg' : 'rounded-bl-md bg-panel-2')}>
                     <div className={clsx('mb-0.5 text-[11px]', m.from_us ? 'text-white/70' : 'text-fg-3')}>{groups.get(m.group_id)?.name} · {m.sender} · {fmtTime(m.created_at).slice(5)}</div>
                     <div className="whitespace-pre-wrap">{m.text}</div>
                   </div>
+                  {!m.from_us && m.group_id === i.group_id && (
+                    <button title="引用这条回复" onClick={() => setQuote(m)}
+                      className="grid size-7 place-items-center rounded-full text-fg-3 opacity-0 transition-opacity group-hover/msg:opacity-100 hover:bg-panel-2 hover:text-accent">
+                      <CornerUpLeft size={14} />
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>
           )}
+          <Composer groupId={i.group_id} groupName={groups.get(i.group_id)?.name ?? ''} incidentId={i.id}
+            quote={quote} onClearQuote={() => setQuote(null)} />
           <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); if (note.trim()) update.mutate({ note }) }}>
-            <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="添加备注，记入处理过程…" />
+            <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="内部备注（客户看不到），记入处理过程…" />
             <Button type="submit" disabled={!note.trim()}>记录</Button>
           </form>
         </div>

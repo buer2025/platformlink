@@ -57,6 +57,8 @@ export type Incident = {
   resolved_at: string | null
   escalated_at: string | null
   escalation_reason: string
+  human_until: string | null
+  human_by: string
   created_at: string
 }
 

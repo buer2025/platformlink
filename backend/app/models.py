@@ -172,6 +172,9 @@ class Incident(Base):
     # 已 @ 内部负责人的时间（同一事件只升级一次，重新打开后可再次升级）
     escalated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     escalation_reason: Mapped[str] = mapped_column(Text, default="")
+    # 人工接管到此时间为止：期间 AI 的消息一律等人工确认，不自动发
+    human_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    human_by: Mapped[str] = mapped_column(String(100), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 

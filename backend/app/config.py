@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     # 升级人工：Agent 准确率低于此值，或客户追问达到次数时 @ 内部负责人
     escalate_below_confidence: int = 50
     escalate_after_followups: int = 2
+    # 我方同事在群里亲自回复后，AI 暂停自动发送多久（分钟）
+    human_takeover_minutes: int = 30
     # 供应商转交单无回复多久后催办，最多催几次
     supplier_remind_minutes: int = 30
     supplier_max_reminders: int = 2

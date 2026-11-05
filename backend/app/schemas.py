@@ -89,6 +89,8 @@ class IncidentOut(BaseModel):
     resolved_at: datetime | None
     escalated_at: datetime | None
     escalation_reason: str
+    human_until: datetime | None
+    human_by: str
     created_at: datetime
 
 
@@ -201,3 +203,16 @@ class KnowledgeOut(KnowledgeIn):
 class StylePreviewIn(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
     style: dict | None = None  # 不传则用群当前的风格（用于编辑中实时试）
+
+
+class ManualSendIn(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    incident_id: int | None = None
+    reply_to_message_id: int | None = None  # 引用哪条消息（本地消息 ID）
+    mentions: list[str] = []
+    actor: str = ""
+
+
+class DraftIn(BaseModel):
+    incident_id: int | None = None
+    intent: str = ""  # 想说什么；留空则由 AI 根据进展自己判断
